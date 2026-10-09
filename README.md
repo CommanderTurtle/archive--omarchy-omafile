@@ -401,6 +401,10 @@ omarchy plugin remove xyzlab.omafile
 
 Removal leaves one file behind, `~/.local/state/omarchy/omafile/state.json`, which remembers open tabs and recent folders. Delete it if you do not want to keep it.
 
+## Community
+
+Questions, ideas, or want to show off your setup? Join the [xyzlab.dev Discord](https://discord.gg/eUb9CyuqHC).
+
 ## License
 
 MIT, Copyright (c) 2026 chr0nzz

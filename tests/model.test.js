@@ -478,6 +478,29 @@ test('sort presets round trip through their keys', function () {
   assert.equal(Model.sortPreset('nope'), null);
 });
 
+test('sorting breaks ties by natural name order, folders first', function () {
+  var rows = [
+    ['track10.mp3', 'f', 5, 200, 33188, null],
+    ['Track2.mp3', 'f', 5, 200, 33188, null],
+    ['notes.txt', 'f', 9, 100, 33188, null],
+    ['track1.mp3', 'f', 1, 300, 33188, null],
+    ['zeta', 'd', 0, 900, 16877, null],
+    ['alpha', 'd', 0, 50, 16877, null]
+  ];
+  function names(sorted) { return Array.prototype.map.call(sorted, function (r) { return r[0]; }); }
+  assert.deepEqual(names(Model.sortRaw(rows, 'modified', false, true)),
+    ['alpha', 'zeta', 'notes.txt', 'Track2.mp3', 'track10.mp3', 'track1.mp3']);
+  assert.deepEqual(names(Model.sortRaw(rows, 'size', true, true)),
+    ['zeta', 'alpha', 'notes.txt', 'track10.mp3', 'Track2.mp3', 'track1.mp3']);
+  assert.deepEqual(names(Model.sortRaw(rows, 'type', false, false)),
+    ['alpha', 'zeta', 'track1.mp3', 'Track2.mp3', 'track10.mp3', 'notes.txt']);
+  assert.deepEqual(names(Model.sortRaw(rows, 'name', true, false)),
+    ['zeta', 'track10.mp3', 'Track2.mp3', 'track1.mp3', 'notes.txt', 'alpha']);
+  assert.equal(Model.naturalCompare('file007', 'file7'), 0);
+  assert.equal(Model.naturalCompare('v1.9', 'v1.10'), -1);
+  assert.equal(Model.naturalCompare('x', 'x1'), -1);
+});
+
 test('durations read as minutes and seconds, with hours when needed', function () {
   assert.equal(Model.formatDuration(0), '0:00');
   assert.equal(Model.formatDuration(5999), '0:05');

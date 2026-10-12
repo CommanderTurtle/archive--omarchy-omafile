@@ -88,30 +88,21 @@ function decodeEntries(chunk, dirPath) {
   return out;
 }
 
-function splitNatural(s) {
-  var out = [];
-  var i = 0;
-  var n = s.length;
-  while (i < n) {
-    var c = s.charAt(i);
-    if (c >= '0' && c <= '9') {
-      var j = i;
-      while (j < n && s.charAt(j) >= '0' && s.charAt(j) <= '9') j++;
-      out.push({ t: 1, v: s.slice(i, j) });
-      i = j;
-    } else {
-      var k = i;
-      while (k < n && !(s.charAt(k) >= '0' && s.charAt(k) <= '9')) k++;
-      out.push({ t: 0, v: s.slice(i, k) });
-      i = k;
-    }
+var naturalParts = /[0-9]+|[^0-9]+/g;
+
+function naturalKey(s) {
+  var pieces = String(s || '').toLowerCase().match(naturalParts) || [];
+  var parts = [];
+  for (var i = 0; i < pieces.length; i++) {
+    var v = pieces[i];
+    var c = v.charCodeAt(0);
+    if (c >= 48 && c <= 57) parts.push({ t: 1, v: v, n: parseInt(v, 10) });
+    else parts.push({ t: 0, v: v });
   }
-  return out;
+  return parts;
 }
 
-function naturalCompare(a, b) {
-  var ax = splitNatural(String(a || '').toLowerCase());
-  var bx = splitNatural(String(b || '').toLowerCase());
+function compareNaturalKeys(ax, bx) {
   var len = Math.max(ax.length, bx.length);
   for (var i = 0; i < len; i++) {
     var av = ax[i];
@@ -119,14 +110,16 @@ function naturalCompare(a, b) {
     if (av === undefined) return -1;
     if (bv === undefined) return 1;
     if (av.t === 1 && bv.t === 1) {
-      var an = parseInt(av.v, 10);
-      var bn = parseInt(bv.v, 10);
-      if (an !== bn) return an < bn ? -1 : 1;
+      if (av.n !== bv.n) return av.n < bv.n ? -1 : 1;
     } else if (av.v !== bv.v) {
       return av.v < bv.v ? -1 : 1;
     }
   }
   return 0;
+}
+
+function naturalCompare(a, b) {
+  return compareNaturalKeys(naturalKey(a), naturalKey(b));
 }
 
 function sortEntries(entries, sortBy, descending, dirsFirst) {
@@ -649,26 +642,26 @@ function isDefaultOrder(sortBy, descending, dirsFirst) {
 }
 
 function sortRaw(rows, sortBy, descending, dirsFirst) {
-  var out = [];
-  for (var i = 0; i < rows.length; i++) out.push(rows[i]);
+  var byType = sortBy === 'type' || sortBy === 'ext';
+  var items = [];
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    var name = String(row[0]);
+    var value = 0;
+    if (sortBy === 'size') value = Number(row[2]) || 0;
+    else if (sortBy === 'modified') value = Number(row[3]) || 0;
+    else if (byType) value = extOf(name);
+    items.push({ row: row, dir: dirsFirst && rawIsDir(row) ? 0 : 1, value: value, key: naturalKey(name) });
+  }
   var direction = descending ? -1 : 1;
-  out.sort(function (a, b) {
-    if (dirsFirst) {
-      var ad = rawIsDir(a) ? 0 : 1;
-      var bd = rawIsDir(b) ? 0 : 1;
-      if (ad !== bd) return ad - bd;
-    }
-    var result = 0;
-    if (sortBy === 'size') result = (Number(a[2]) || 0) - (Number(b[2]) || 0);
-    else if (sortBy === 'modified') result = (Number(a[3]) || 0) - (Number(b[3]) || 0);
-    else if (sortBy === 'type' || sortBy === 'ext') {
-      var ae = extOf(String(a[0]));
-      var be = extOf(String(b[0]));
-      result = ae < be ? -1 : (ae > be ? 1 : 0);
-    }
-    if (result === 0) return naturalCompare(String(a[0]), String(b[0])) * direction;
+  items.sort(function (a, b) {
+    if (a.dir !== b.dir) return a.dir - b.dir;
+    var result = byType ? (a.value < b.value ? -1 : (a.value > b.value ? 1 : 0)) : a.value - b.value;
+    if (result === 0) return compareNaturalKeys(a.key, b.key) * direction;
     return result * direction;
   });
+  var out = [];
+  for (var j = 0; j < items.length; j++) out.push(items[j].row);
   return out;
 }
 

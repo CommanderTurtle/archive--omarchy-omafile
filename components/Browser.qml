@@ -1306,6 +1306,8 @@ Item {
   property bool previewTruncated: false
   property bool previewLoading: false
   property int previewToken: 0
+  property real previewVolume: 1
+  property bool previewMuted: false
   readonly property string previewKind: Model.previewKind(previewEntry)
 
   function showPreview(entry) {
@@ -1352,9 +1354,22 @@ Item {
     if (entry) showPreview(entry)
   }
 
+  function handleAudioKey(event) {
+    var player = audioPreview.item
+    if (!player) return false
+    var shift = (event.modifiers & Qt.ShiftModifier) !== 0
+    var plain = (event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) === 0
+    if (plain && (event.key === Qt.Key_K || event.key === Qt.Key_P)) { player.togglePlay(); return true }
+    if (plain && event.key === Qt.Key_M) { previewMuted = !previewMuted; return true }
+    if (plain && shift && event.key === Qt.Key_Left) { player.seekBy(-5000); return true }
+    if (plain && shift && event.key === Qt.Key_Right) { player.seekBy(5000); return true }
+    return false
+  }
+
   function handlePreviewKey(event) {
     var p = activePane()
     if (event.key === Qt.Key_Escape || event.key === Qt.Key_Space) { closePreview(); return true }
+    if (previewKind === "audio" && handleAudioKey(event)) return true
     if (event.key === Qt.Key_Right) { stepPreview(1); return true }
     if (event.key === Qt.Key_Left) { stepPreview(-1); return true }
     if (event.key === Qt.Key_Down) { stepPreview(p.columnsPerRow()); return true }
@@ -2867,12 +2882,33 @@ Item {
             }
           }
 
+          Loader {
+            id: audioPreview
+            objectName: "audioPreviewLoader"
+            anchors.fill: parent
+            active: root.previewOpen && root.previewKind === "audio"
+            source: "AudioPreview.qml"
+            onLoaded: {
+              item.service = Qt.binding(function () { return root.service })
+              item.thumbnails = Qt.binding(function () { return root.boolSetting("thumbnails", true) })
+              item.volume = Qt.binding(function () { return root.previewVolume })
+              item.muted = Qt.binding(function () { return root.previewMuted })
+              item.entry = Qt.binding(function () { return root.previewKind === "audio" ? root.previewEntry : null })
+              item.volumeMoved.connect(function (v) {
+                root.previewVolume = v
+                root.previewMuted = false
+              })
+              item.muteToggled.connect(function () { root.previewMuted = !root.previewMuted })
+            }
+          }
+
           Column {
             anchors.centerIn: parent
             spacing: Style.space(10)
             visible: root.previewKind === "folder" || root.previewKind === "none"
               || (root.previewKind === "text" && (root.previewBinary || root.previewLoading))
               || (root.previewKind === "image" && previewImage.status === Image.Error)
+              || (root.previewKind === "audio" && audioPreview.status === Loader.Error)
 
             Text {
               textFormat: Text.PlainText
@@ -2888,7 +2924,8 @@ Item {
               anchors.horizontalCenter: parent.horizontalCenter
               text: root.previewLoading ? "Reading"
                 : (root.previewKind === "folder" ? "Folder. Press Enter to open it."
-                  : "No preview for this kind of file")
+                  : (root.previewKind === "audio" ? "Playing audio here needs the qt6-multimedia package"
+                    : "No preview for this kind of file"))
               color: Util.alpha(Color.popups.text, 0.55)
               font.family: Style.font.family
               font.pixelSize: Style.font.body
@@ -3890,6 +3927,9 @@ Item {
       { keys: "Ctrl+Plus / Ctrl+Minus", label: "Zoom in and out, also Ctrl with the scroll wheel" },
       { keys: "Ctrl+0", label: "Reset the zoom to 100 percent" },
       { keys: "Space", label: "Preview the item under the cursor" },
+      { keys: "K / P", label: "Play or pause audio, in the preview" },
+      { keys: "Shift+Left / Shift+Right", label: "Skip back or forward 5 seconds, in the preview" },
+      { keys: "M", label: "Mute audio, in the preview" },
       { keys: "Mouse back / forward", label: "Back and forward" },
       { keys: "Ctrl+H", label: "Show hidden files" },
       { keys: "F9 / Ctrl+B", label: "Show or hide the sidebar" },

@@ -864,8 +864,27 @@ function previewKind(entry) {
   if (!entry) return 'none';
   if (entry.isDir) return 'folder';
   if (entry.isBroken) return 'none';
-  if (imageExtSet[String(entry.ext || '').toLowerCase()]) return 'image';
+  var ext = String(entry.ext || '').toLowerCase();
+  if (imageExtSet[ext]) return 'image';
+  if (audioExtSet[ext]) return 'audio';
   return 'text';
+}
+
+function outputVolume(sliderValue) {
+  var v = Number(sliderValue) || 0;
+  if (v <= 0) return 0;
+  if (v > 0.99) return 1;
+  return -Math.log(1 - v) / Math.log(100);
+}
+
+function formatDuration(ms) {
+  var total = Math.floor((Number(ms) || 0) / 1000);
+  if (total < 0) total = 0;
+  var hours = Math.floor(total / 3600);
+  var minutes = Math.floor((total % 3600) / 60);
+  var seconds = total % 60;
+  if (hours > 0) return hours + ':' + pad2(minutes) + ':' + pad2(seconds);
+  return minutes + ':' + pad2(seconds);
 }
 
 function windowTitle(slot) {

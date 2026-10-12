@@ -8,7 +8,7 @@ A lightweight, fast file manager plugin for Omarchy running in the shell.
 * Dual pane layout with one-key copy and move between panes
 * List, compact, grid and gallery views, with zoom from Ctrl+Scroll or the View menu
 * Sort from the View menu in any view: A to Z, Z to A, last modified, size or type
-* Quick preview with Space: images full size, text files such as `.yml` as plain text
+* Quick preview with Space: images full size, text files such as `.yml` as plain text, and audio files play with a seek bar, cover art and volume
 * Mouse back and forward buttons move through folder history
 * Can stand in for the GTK file chooser, so browser uploads and downloads open Omafile
 * Live directory watching: external changes appear immediately
@@ -32,6 +32,7 @@ A lightweight, fast file manager plugin for Omarchy running in the shell.
 * Optional: `udisksctl` for ejecting removable drives
 * Optional: `gvfs` and `gvfs-smb` for connecting to network servers
 * Optional: PyGObject for Show in folder from other applications
+* Optional: `qt6-multimedia` for playing audio in the preview (Omarchy installs it with Kdenlive)
 
 ## Install
 
@@ -97,6 +98,8 @@ Zoom scales rows, icons and grid cells from 50 to 300 percent. Use the minus and
 ### Preview
 
 Press Space on a file to preview it without opening another app. Images are shown full size. Text files such as `.yml`, `.json`, `.md` or scripts are shown as text, up to the first 256 KB. Arrow keys move to the next file while the preview stays open. Enter opens the file, and Space or Escape closes the preview. Preview is also in the right click menu.
+
+Audio files (`.mp3`, `.flac`, `.ogg`, `.opus`, `.m4a`, `.aac`, `.wav`, `.wma`) start playing as soon as the preview opens, with the title, artist, album and cover art when the file has them. Arrow to the next file to hear it instead, which makes it quick to go through a folder of tracks or samples. K or P plays and pauses, Shift+Left and Shift+Right skip 5 seconds, and M mutes. Playback stops when the preview closes. The volume is kept while the window stays open. Playing audio needs Qt Multimedia, which Omarchy already installs alongside Kdenlive. Without it the preview says to install `qt6-multimedia`.
 
 Open with in the right click menu lists your apps with their icons. Click an app to select it, then double click it or press Open. Turn on **Always open ... with this app** to make it the default for that file type, the same default double click and Opens with in Properties use. It is not offered for folders.
 
@@ -287,6 +290,9 @@ Undo covers trash, rename, move, copy and new file or folder. Undoing a trash pu
 | `Ctrl+Plus` / `Ctrl+Minus`, or `Ctrl` + scroll | Zoom in and out |
 | `Ctrl+0` | Reset the zoom to 100 percent |
 | `Space` | Preview the item under the cursor |
+| `K` / `P` | Play or pause audio, in the preview |
+| `Shift+Left` / `Shift+Right` | Skip back or forward 5 seconds, in the preview |
+| `M` | Mute audio, in the preview |
 | `Ctrl+H` | Show hidden files |
 | `F9` / `Ctrl+B` | Show or hide the sidebar |
 | `Ctrl+F`, or just type | Search in this folder |

@@ -809,6 +809,44 @@ ShellRoot {
         verify(!browser.previewOpen)
       }
 
+      function test_5b_audioPreview() {
+        var tone = Quickshell.env("OMAFILE_TEST_TONE") || ""
+        verify(tone !== "", "browser-flows.sh passes a tone file")
+        browser.previewVolume = 0.5
+        browser.previewMuted = true
+        browser.showPreview(Model.decodeEntry([Model.basename(tone), "f", 320044, 100, 420, null], Model.dirname(tone)))
+        compare(browser.previewKind, "audio")
+        var loader = findChild(browser, "audioPreviewLoader")
+        tryVerify(function () { return loader.status === Loader.Ready }, 5000, "audio player loads")
+        var audio = loader.item
+        tryVerify(function () { return audio.playing }, 5000, "audio starts on its own")
+        tryVerify(function () { return audio.player.duration > 19000 }, 5000, "duration is read")
+        verify(Math.abs(audio.player.audioOutput.volume - 0.1505) < 0.001, "the slider maps to output volume")
+        verify(audio.player.audioOutput.muted, "the output starts muted")
+        keyClick(Qt.Key_K)
+        verify(!audio.playing, "K pauses")
+        var before = audio.player.position
+        keyClick(Qt.Key_Right, Qt.ShiftModifier)
+        tryVerify(function () { return audio.player.position >= before + 4000 }, 3000, "Shift+Right skips ahead")
+        verify(browser.previewOpen, "seeking keeps the preview on this file")
+        keyClick(Qt.Key_M)
+        verify(!browser.previewMuted, "M unmutes")
+        verify(!audio.player.audioOutput.muted, "the output follows the mute")
+        keyClick(Qt.Key_M)
+        verify(browser.previewMuted, "M mutes again")
+        keyClick(Qt.Key_P)
+        tryVerify(function () { return audio.playing }, 3000, "P resumes")
+        keyClick(Qt.Key_Space)
+        verify(!browser.previewOpen)
+        tryVerify(function () { return loader.item === null }, 3000, "closing the preview drops the player")
+        browser.showPreview(Model.decodeEntry(["missing.mp3", "f", 10, 100, 420, null], "/tmp/omafile-no-such-dir"))
+        tryVerify(function () { return loader.item && loader.item.failed }, 5000, "a file that will not play reports it")
+        keyClick(Qt.Key_Escape)
+        verify(!browser.previewOpen)
+        browser.previewVolume = 1
+        browser.previewMuted = false
+      }
+
       function test_6_settingsFit() {
         window.implicitWidth = 480
         window.implicitHeight = 330

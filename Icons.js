@@ -106,7 +106,13 @@ var actionGlyphs = {
   window: '',
   popup: '',
   app: '',
-  extract: ''
+  extract: '',
+  play: '',
+  pause: '',
+  seekBack: '',
+  seekForward: '',
+  volume: '',
+  muted: ''
 };
 
 var FALLBACK_CATEGORY = '';

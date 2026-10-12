@@ -13,7 +13,15 @@ for module in Commons Ui services; do
 done
 ln -s "$repo_root" "$stage/FilePlugin"
 cp "$repo_root/tests/browser-flows.qml" "$stage/shell.qml"
-if ! QT_QPA_PLATFORM=offscreen qs -p "$stage/shell.qml" --no-color > "$stage/output.log" 2>&1; then
+python3 -I - "$stage/tone.wav" <<'EOF'
+import math, struct, sys, wave
+with wave.open(sys.argv[1], "wb") as out:
+    out.setnchannels(1)
+    out.setsampwidth(2)
+    out.setframerate(8000)
+    out.writeframes(b"".join(struct.pack("<h", int(8000 * math.sin(i / 8000 * 2 * math.pi * 440))) for i in range(8000 * 20)))
+EOF
+if ! OMAFILE_TEST_TONE="$stage/tone.wav" QT_QPA_PLATFORM=offscreen qs -p "$stage/shell.qml" --no-color > "$stage/output.log" 2>&1; then
   cat "$stage/output.log"
   exit 1
 fi

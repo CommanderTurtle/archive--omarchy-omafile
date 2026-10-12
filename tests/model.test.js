@@ -478,10 +478,32 @@ test('sort presets round trip through their keys', function () {
   assert.equal(Model.sortPreset('nope'), null);
 });
 
+test('durations read as minutes and seconds, with hours when needed', function () {
+  assert.equal(Model.formatDuration(0), '0:00');
+  assert.equal(Model.formatDuration(5999), '0:05');
+  assert.equal(Model.formatDuration(65000), '1:05');
+  assert.equal(Model.formatDuration(3725000), '1:02:05');
+  assert.equal(Model.formatDuration(-10), '0:00');
+  assert.equal(Model.formatDuration(undefined), '0:00');
+});
+
+test('the volume slider follows loudness, ending at silence and full volume', function () {
+  assert.equal(Model.outputVolume(0), 0);
+  assert.equal(Model.outputVolume(-1), 0);
+  assert.equal(Model.outputVolume(1), 1);
+  assert.equal(Model.outputVolume(2), 1);
+  assert.ok(Math.abs(Model.outputVolume(0.5) - 0.1505) < 0.001);
+  assert.ok(Model.outputVolume(0.25) < Model.outputVolume(0.5));
+  assert.ok(Model.outputVolume(0.5) < Model.outputVolume(0.9));
+});
+
 test('preview kind follows the entry', function () {
   assert.equal(Model.previewKind(Model.decodeEntry(['a.png', 'f', 1, 0, 0, null], '/tmp')), 'image');
   assert.equal(Model.previewKind(Model.decodeEntry(['a.yml', 'f', 1, 0, 0, null], '/tmp')), 'text');
   assert.equal(Model.previewKind(Model.decodeEntry(['d', 'd', 0, 0, 0, null], '/tmp')), 'folder');
+  assert.equal(Model.previewKind(Model.decodeEntry(['a.mp3', 'f', 1, 0, 0, null], '/tmp')), 'audio');
+  assert.equal(Model.previewKind(Model.decodeEntry(['A.FLAC', 'f', 1, 0, 0, null], '/tmp')), 'audio');
+  assert.equal(Model.previewKind(Model.decodeEntry(['a.mp4', 'f', 1, 0, 0, null], '/tmp')), 'text');
   assert.equal(Model.previewKind(null), 'none');
   assert.equal(Model.isViewMode('grid'), true);
   assert.equal(Model.isViewMode('gallery'), true);

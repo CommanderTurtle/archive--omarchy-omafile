@@ -1046,6 +1046,31 @@ def volume_mounts():
         pass
     return mounts
 
+TRASHINFO_LIMIT = 65536
+
+def read_trashinfo(info_path):
+    try:
+        fd = os.open(info_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > TRASHINFO_LIMIT:
+            return None
+        data = b""
+        while len(data) <= TRASHINFO_LIMIT:
+            chunk = os.read(fd, TRASHINFO_LIMIT + 1 - len(data))
+            if not chunk:
+                break
+            data += chunk
+        if len(data) > TRASHINFO_LIMIT:
+            return None
+        return data.decode("utf-8", "surrogateescape")
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
 def list_trash_roots():
     roots = [home_trash_dirs()]
     seen = {os.path.dirname(roots[0][0])}
@@ -1075,7 +1100,10 @@ def op_restore(req):
                 continue
             found = True
             try:
-                raw = open(info_path, "rb").read().decode("utf-8", "surrogateescape")
+                raw = read_trashinfo(info_path)
+                if raw is None:
+                    results.append({"path": item, "ok": False, "message": "invalid trashinfo"})
+                    break
                 path_val = None
                 for line in raw.splitlines():
                     if line.startswith("Path="):
@@ -1118,9 +1146,8 @@ def op_trashinfo(req):
             if not n.endswith(b".trashinfo"):
                 continue
             info_path = os.path.join(info_dir, n)
-            try:
-                raw = open(info_path, "rb").read().decode("utf-8", "surrogateescape")
-            except OSError:
+            raw = read_trashinfo(info_path)
+            if raw is None:
                 continue
             path_val = None
             deleted = None

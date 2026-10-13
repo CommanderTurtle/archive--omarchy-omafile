@@ -2373,6 +2373,7 @@ Item {
           TextField {
             id: pickNameField
             objectName: "pickNameField"
+            readOnly: !visible
             anchors.verticalCenter: parent.verticalCenter
             width: pickLeft.width - pickTitleText.width - pickLeft.spacing
             visible: root.pickNeedsName
@@ -2988,6 +2989,7 @@ Item {
           TextField {
             id: dialogField
             objectName: "dialogField"
+            readOnly: !visible
             width: parent.width
             visible: root.dialogMode === "rename" || root.dialogMode === "newfolder"
               || root.dialogMode === "newfile" || root.dialogMode === "path"
@@ -3024,6 +3026,7 @@ Item {
 
           TextField {
             id: appField
+            readOnly: !visible
             width: parent.width
             visible: root.dialogMode === "openwith"
             placeholderText: "Search applications or type a command"
@@ -3340,6 +3343,7 @@ Item {
                   }
 
                   TextField {
+                    readOnly: !visible
                     width: parent.width
                     text: root.textSetting("homePath", "")
                     placeholderText: "Your home folder"
@@ -3519,6 +3523,7 @@ Item {
                   }
 
                   TextField {
+                    readOnly: !visible
                     width: parent.width
                     text: root.textSetting("terminal", "")
                     placeholderText: "System default"
@@ -3531,6 +3536,7 @@ Item {
                   }
 
                   TextField {
+                    readOnly: !visible
                     width: parent.width
                     text: root.textSetting("editor", "")
                     placeholderText: "Omarchy default"
@@ -3594,6 +3600,7 @@ Item {
                   }
 
                   TextField {
+                    readOnly: !visible
                     width: parent.width
                     text: root.textSetting("glyph", "")
                     placeholderText: "Folder"
@@ -3665,6 +3672,7 @@ Item {
             TextField {
               id: serverField
               objectName: "serverField"
+              readOnly: !visible
               width: parent.width
               placeholderText: "smb://server/share"
               onAccepted: root.submitConnect()
@@ -3682,6 +3690,7 @@ Item {
             TextField {
               id: userField
               objectName: "userField"
+              readOnly: !visible
               width: parent.width
               visible: !root.connectAnonymous
               placeholderText: "User name"
@@ -3690,6 +3699,7 @@ Item {
 
             TextField {
               id: domainField
+              readOnly: !visible
               width: parent.width
               visible: !root.connectAnonymous
               placeholderText: "Domain or workgroup, optional"
@@ -3698,6 +3708,7 @@ Item {
 
             TextField {
               id: passwordField
+              readOnly: !visible
               width: parent.width
               visible: !root.connectAnonymous
               placeholderText: "Password"

@@ -39,6 +39,8 @@ Column {
   property bool busy: false
   property string errorText: ""
   property string tab: "general"
+  property bool choosingOpener: false
+  onEntryChanged: choosingOpener = false
 
   readonly property bool modeDirty: editBits !== originalBits
   readonly property bool groupDirty: info !== null && editGroup !== "" && editGroup !== String(info.group)
@@ -290,17 +292,48 @@ Column {
                 source: panel.openerApp() && panel.openerApp().icon ? Quickshell.iconPath(panel.openerApp().icon, true) : ""
               }
 
-              SearchableDropdown {
-                id: changeApp
-                objectName: "changeOpener"
+              Item {
                 width: parent.width - Style.space(26)
+                height: Style.spacing.controlHeight
                 anchors.verticalCenter: parent.verticalCenter
-                showLabel: false
-                triggerLabel: "Choose an application"
-                placeholderText: "Search applications"
-                options: panel.appOptions()
-                value: panel.openerHandler
-                onChanged: function (v) { panel.openerChosen(v) }
+
+                Button {
+                  objectName: "changeOpenerButton"
+                  anchors.fill: parent
+                  visible: !panel.choosingOpener
+                  bordered: true
+                  leftAlign: true
+                  text: panel.openerApp() ? String(panel.openerApp().name || panel.openerHandler) : "Choose an application"
+                  onClicked: panel.choosingOpener = true
+
+                  Text {
+                    textFormat: Text.PlainText
+                    anchors.right: parent.right
+                    anchors.rightMargin: Style.spacing.controlPaddingX
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: Icons.actionGlyph("chevronDown")
+                    color: panel.fg
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
+                }
+
+                Loader {
+                  objectName: "changeOpenerLoader"
+                  anchors.fill: parent
+                  active: panel.choosingOpener && infoRow.modelData.opener === true
+                  sourceComponent: SearchableDropdown {
+                    objectName: "changeOpener"
+                    showLabel: false
+                    triggerLabel: "Choose an application"
+                    placeholderText: "Search applications"
+                    options: panel.appOptions()
+                    value: panel.openerHandler
+                    onChanged: function (v) { panel.openerChosen(v) }
+                    onPopupOpenChanged: if (!popupOpen) Qt.callLater(function () { panel.choosingOpener = false })
+                    Component.onCompleted: Qt.callLater(open)
+                  }
+                }
               }
             }
           }

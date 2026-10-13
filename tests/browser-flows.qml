@@ -847,6 +847,78 @@ ShellRoot {
         browser.previewMuted = false
       }
 
+      function textInputs(item, out) {
+        if (item.hasOwnProperty("echoMode") && item.hasOwnProperty("cursorPosition")) out.push(item)
+        for (var i = 0; i < item.children.length; i++) textInputs(item.children[i], out)
+        return out
+      }
+
+      function editableInputs() {
+        return textInputs(browser, []).filter(function (t) { return !t.readOnly })
+      }
+
+      function editableHidden() {
+        return editableInputs().filter(function (t) { return !t.visible }).map(function (t) { return String(t) })
+      }
+
+      function shownChild(name) {
+        var found = null
+        function walk(item) {
+          if (found) return
+          if (item.objectName === name && item.visible) { found = item; return }
+          for (var i = 0; i < item.children.length; i++) walk(item.children[i])
+        }
+        walk(browser)
+        return found
+      }
+
+      function namedChildren(name) {
+        var out = []
+        function walk(item) {
+          if (item.objectName === name) out.push(item)
+          for (var i = 0; i < item.children.length; i++) walk(item.children[i])
+        }
+        walk(browser)
+        return out
+      }
+
+      function test_5c_hiddenInputsAreReadOnly() {
+        waitRows()
+        verify(textInputs(browser, []).length >= 13, "found the text inputs")
+        compare(editableInputs().length, 0, "nothing is editable while every editor is closed")
+
+        keyClick(Qt.Key_L, Qt.ControlModifier)
+        tryVerify(function () { return editableInputs().length === 1 && editableInputs()[0].activeFocus }, 3000, "the path editor is editable while open")
+        compare(editableHidden(), [])
+        keyClick(Qt.Key_Escape)
+        tryVerify(function () { return editableInputs().length === 0 }, 3000, "and read only again once closed")
+
+        browser.showDialog("newfolder", "New folder", "", null)
+        var field = findChild(browser, "dialogField")
+        tryVerify(function () { return field.visible && !field.readOnly }, 3000, "a dialog field is editable while its dialog is open")
+        compare(editableHidden(), [])
+        browser.closeDialog()
+        tryVerify(function () { return field.readOnly && editableInputs().length === 0 }, 3000, "and read only once it closes")
+
+        var saved = mock.statItems
+        mock.statItems = { "/tmp/alpha.yml": { kind: "f", size: 30, mtime: 300, atime: 300, ctime: 300,
+          mode: 33188, uid: 1000, gid: 1000, owner: "me", group: "me", mime: "text/yaml" } }
+        browser.showProperties(Model.decodeEntry(["alpha.yml", "f", 30, 300, 420, null], "/tmp"))
+        tryVerify(function () { return shownChild("changeOpenerButton") !== null && shownChild("changeOpenerButton").visible }, 3000)
+        compare(namedChildren("changeOpener").length, 0, "the app search is not created until it is needed")
+        compare(editableInputs().length, 0)
+        shownChild("changeOpenerButton").clicked()
+        tryVerify(function () { var d = shownChild("changeOpener"); return d !== null && d.popupOpen }, 3000, "clicking opens the app search")
+        compare(namedChildren("changeOpener").length, 1, "only the Opens with row gets one")
+        wait(500)
+        shownChild("changeOpener").close()
+        tryVerify(function () { return namedChildren("changeOpener").length === 0 }, 3000, "closing the list removes it again")
+        verify(shownChild("changeOpenerButton").visible)
+        browser.closeDialog()
+        mock.statItems = saved
+        compare(editableInputs().length, 0)
+      }
+
       function test_6_settingsFit() {
         window.implicitWidth = 480
         window.implicitHeight = 330

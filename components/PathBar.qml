@@ -196,6 +196,7 @@ Item {
 
         TextInput {
           id: pathInput
+          readOnly: !visible
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.verticalCenter: parent.verticalCenter
@@ -310,6 +311,7 @@ Item {
 
           TextInput {
             id: filterInput
+            readOnly: !visible
             anchors.fill: parent
             verticalAlignment: TextInput.AlignVCenter
             color: bar.findMode ? Color.urgent : Color.foreground

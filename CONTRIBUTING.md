@@ -65,6 +65,7 @@ qmllint -I /usr/share/omarchy/shell -I . *.qml components/*.qml
 - A list that crosses a `ListView` model boundary becomes a QVariantList, so `Array.isArray` is false. Iterate by `.length`.
 - `Item.visible` reports effective visibility. A container whose `visible` reads its children latches hidden.
 - Large directories: keep rows in the helper's raw array form and decode only visible delegates. Building tens of thousands of objects in QML freezes the desktop.
+- An editable `TextInput` or `TextField` reads the whole clipboard text every time it changes, even while hidden. Give every one `readOnly: !visible`, and create shell components that hide a text field, such as `SearchableDropdown`, through a `Loader` only while they are open.
 
 ## Pull requests
 

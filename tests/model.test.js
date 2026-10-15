@@ -745,3 +745,46 @@ test('isPlainFileName refuses empty names, dot names, slashes and NUL', () => {
   assert.equal(Model.isPlainFileName('a\0b'), false);
   assert.equal(Model.isPlainFileName(null), false);
 });
+
+test('previewKind only previews regular files and links to them', function () {
+  assert.equal(Model.previewKind(Model.decodeEntry(['song.mp3', 'o', 0, 0, 0, null], '/tmp')), 'none');
+  assert.equal(Model.previewKind(Model.decodeEntry(['pic.png', 'o', 0, 0, 0, '/dev/zero'], '/tmp')), 'none');
+  assert.equal(Model.previewKind(Model.decodeEntry(['notes.txt', 'o', 0, 0, 0, null], '/tmp')), 'none');
+  assert.equal(Model.previewKind(Model.decodeEntry(['song.mp3', 'l', 10, 0, 0, '/music/a.mp3'], '/tmp')), 'audio');
+  assert.equal(Model.previewKind(Model.decodeEntry(['huge.png', 'f', 65 * 1024 * 1024, 0, 0, null], '/tmp')), 'none');
+});
+
+test('glob matching stays fast on hostile patterns', function () {
+  var name = new Array(250).join('a');
+  var pattern = new Array(30).join('*a') + '*b';
+  var started = Date.now();
+  for (var i = 0; i < 2000; i++) assert.equal(Model.matchesPatterns(name, [pattern]), false);
+  assert.ok(Date.now() - started < 2000);
+  assert.equal(Model.matchesPatterns('x', [new Array(80).join('*')]), false);
+  assert.equal(Model.matchesPatterns('b.txt', ['[z-a].txt']), true);
+  assert.equal(Model.matchesPatterns('B.TXT', ['[a-c].txt']), true);
+  assert.equal(Model.matchesPatterns('a.txt', ['*.txt*']), true);
+  assert.equal(Model.matchesPatterns('[.txt', ['[.txt']), true);
+});
+
+test('expandFieldCodes quotes the path inside a shell script argument', function () {
+  assert.deepEqual(expand(['sh', '-c', 'mpv %f'], "/tmp/a'; id; '.mp3"),
+    ['sh', '-c', "mpv '/tmp/a'\\''; id; '\\''.mp3'"]);
+  assert.deepEqual(expand(['/usr/bin/env', 'bash', '-c', 'cat %f'], '/tmp/$(id)'),
+    ['/usr/bin/env', 'bash', '-c', "cat '/tmp/$(id)'"]);
+  assert.deepEqual(expand(['app', '-c', 'x %f'], '/tmp/a b'), ['app', '-c', 'x /tmp/a b']);
+});
+
+test('isWithin matches a folder and what is inside it, never a sibling with the same prefix', function () {
+  assert.equal(Model.isWithin('/mnt/nas/a.mp3', '/mnt/nas'), true);
+  assert.equal(Model.isWithin('/mnt/nas', '/mnt/nas/'), true);
+  assert.equal(Model.isWithin('/mnt/nas2/a.mp3', '/mnt/nas'), false);
+  assert.equal(Model.isWithin('/home/a', '/'), false);
+});
+
+test('escapeLoneSurrogates keeps a non UTF-8 name exact on its way to the helper', function () {
+  var line = Model.escapeLoneSurrogates('{"p":"/tmp/\udcff😀"}');
+  assert.equal(line, '{"p":"/tmp/\\udcff😀"}');
+  assert.equal(JSON.parse(line).p, '/tmp/\udcff😀');
+  assert.equal(Model.escapeLoneSurrogates('plain'), 'plain');
+});

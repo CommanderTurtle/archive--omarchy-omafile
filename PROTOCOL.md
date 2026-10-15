@@ -14,7 +14,9 @@ A request is one JSON object per line:
 ```
 
 `id` is a positive integer chosen by the caller and unique among in-flight requests.
-Every response echoes it. `op` names the operation.
+Every response echoes it. `op` names the operation. A cancellable request whose `id` is
+already running is refused with `EBUSY`, and a request that cannot get a worker thread
+fails with `EAGAIN`. Lines are read as raw bytes, so one bad line never stops the helper.
 
 A response is one JSON object per line with `id` and `t` (type):
 
@@ -37,7 +39,7 @@ exactly one `done` or `error`.
 ```
 
 `code` is the errno name where one applies, otherwise one of `EINVAL`, `ECANCELED`,
-`EUNSUPPORTED`, `EINTERNAL`.
+`EUNSUPPORTED`, `EINTERNAL`, `EFAIL`.
 
 ## Entry encoding
 
@@ -60,8 +62,19 @@ time.
 
 Names that are not valid UTF-8 are decoded with `surrogateescape` and re-encoded for
 JSON with `\udcXX` escapes. The helper accepts the same encoding on input and restores
-the original bytes before touching the filesystem. A path is never passed through a
+the original bytes before touching the filesystem. Qt's `JSON.stringify` writes a lone
+surrogate raw, so the shell escapes them before sending a line; the helper also decodes
+raw UTF-8 encoded surrogates with `surrogatepass`. A path is never passed through a
 shell.
+
+## Path safety
+
+Every operation on a single item opens the parent folder one component at a time with
+`O_PATH | O_NOFOLLOW` and then works relative to that handle. A symlinked folder on the
+way is followed only when it is owned by the user or root and lives on a local
+filesystem that is not a network or FUSE filesystem, not under `/mnt`, `/media` or
+`/run/media`, and not in GVFS. Anything else fails with `ELOOP`. The last component must
+be a plain name, never `.` or `..`.
 
 ## Operations
 
@@ -72,8 +85,10 @@ shell.
 ```
 
 Streams `{"t": "entries", "c": [...]}` in chunks of at most `chunk` entries, then
-`{"t": "done", "total": <int>}`. Symlinks are not followed for the stat. `hidden`
-defaults to `false` and controls dotfiles only.
+`{"t": "done", "total": <int>, "real": <path>}`. `real` is the folder's canonical path.
+A folder with more than 200,000 entries stops there and adds `"truncated": true`.
+Symlinks are not followed for the stat, and a symlink to anything other than a folder or
+a regular file is reported as `o`. `hidden` defaults to `false` and controls dotfiles only.
 
 ### watch, unwatch
 
@@ -130,7 +145,7 @@ Makes `handler` the default for `mime` through `gio mime`. `inode/directory` is 
 {"id": N, "op": "chmod", "path": "/a", "set": 420, "clear": 18, "recursive": false}
 ```
 
-Adds the `set` bits and removes the `clear` bits from the permission bits of `path`, and of everything under it when `recursive`. Symlinks are skipped and never followed: each item is opened with `O_NOFOLLOW` and changed through that handle. Replies `done` with `changed`.
+Adds the `set` bits and removes the `clear` bits from the permission bits of `path`, and of everything under it when `recursive`. Symlinks are skipped and never followed: the tree is walked with `os.fwalk` through folder handles, and each item is opened with `O_NOFOLLOW` and changed through that handle. Replies `done` with `changed`.
 
 ### chown
 
@@ -138,7 +153,7 @@ Adds the `set` bits and removes the `clear` bits from the permission bits of `pa
 {"id": N, "op": "chown", "path": "/a", "owner": "name", "group": "name", "recursive": false}
 ```
 
-`owner` and `group` are optional but one is required. Names or numeric ids. Symlinks are not followed. Replies `done` with `changed`, or `EPERM` when the caller may not make the change.
+`owner` and `group` are optional but one is required. Names or numeric ids. Symlinks are not followed, and the tree is walked through folder handles. Replies `done` with `changed`, or `EPERM` when the caller may not make the change.
 
 ### du
 
@@ -147,7 +162,9 @@ Adds the `set` bits and removes the `clear` bits from the permission bits of `pa
 ```
 
 Streams `{"t": "du", "bytes": B, "files": F, "dirs": D, "partial": true}` at most four
-times per second, then a final response with `"partial": false`, then `done`.
+times per second, then a final response with `"partial": false`, then `done`. Stays on
+the starting filesystem, counts each folder once, and stops 256 levels deep. Cancellable;
+the shell cancels it when Properties closes.
 
 ### copy, move
 
@@ -160,15 +177,26 @@ times per second, then a final response with `"partial": false`, then `done`.
 at most ten times per second.
 
 With `conflict: "ask"`, on a collision the helper emits
-`{"t": "conflict", "source": "/a/x", "dest": "/b/x", "destKind": "f", "destSize": S, "destMtime": M}`
+`{"t": "conflict", "source": "/a/x", "dest": "/b/x", "destKind": "f", "destSize": S, "destMtime": M, "seq": Q}`
 and pauses that job until the caller sends:
 
 ```
-{"id": N, "op": "resolve", "action": "overwrite", "applyAll": false}
+{"id": N, "op": "resolve", "action": "overwrite", "applyAll": false, "seq": Q}
 ```
 
-`action` is `overwrite`, `skip`, `rename` or `cancel`. Terminal response is
-`{"t": "done", "copied": C, "skipped": S, "errors": [{"path": P, "message": M}]}`.
+`action` is `overwrite`, `skip`, `rename` or `cancel`; anything else is treated as
+`cancel`. A `resolve` without the matching `seq`, or a second answer to the same
+conflict, is ignored. Terminal response is
+`{"t": "done", "copied": C, "skipped": S, "errors": [{"path": P, "message": M}], "created": [{"source": S, "path": P}]}`.
+`created` lists each top-level item the job actually placed and where, after any
+renaming. Merged folders and skipped items are left out, so undo can act on exactly
+what the job made.
+
+Overwriting a file writes a `.omafile-part-*` temporary file next to it and renames it
+over the old one only when the copy is complete. Without overwrite, names are placed
+with `renameat2(RENAME_NOREPLACE)`, so an existing file is never replaced. The
+destination folder is opened safely and checked to be the folder that was looked at,
+and a source whose name is `.` or `..` is refused.
 
 `move` renames within a filesystem and falls back to copy then unlink across
 filesystems. It never calls `os.rename` blindly across devices. Copy preserves mode and
@@ -191,6 +219,17 @@ Files reads as a move. `clipget` replies `done` with `mode` (`copy` or `cut`) an
 read from either type, and an empty `paths` when the clipboard holds no files.
 The `image` field names an available image MIME type when there are no files, or is empty.
 `clipclear` always replies `done`. A missing `wl-copy` or `wl-paste` is `EUNSUPPORTED`.
+Every read has a 3 second limit. A file list over 1 MB or 20,000 paths fails with `E2BIG`.
+
+### cliptext
+
+```
+{"id": N, "op": "cliptext"}
+```
+
+Replies `done` with `text`, the clipboard's plain text, for pasting into a text field.
+At most 64 KB; more fails with `E2BIG`. Text fields never read the clipboard through
+Qt, so this is the only path clipboard text takes into the shell.
 
 ### samedev
 
@@ -209,6 +248,7 @@ are and copies when they are not.
 {"id": N, "op": "restore", "items": ["x.trashinfo"]}
 ```
 
+`trash`, `delete` and `restore` open folders as described in Path safety.
 `trash` implements the freedesktop trash specification directly: `$XDG_DATA_HOME/Trash`
 with `files/` and `info/`, a `DeletionDate` in local time, `%`-encoded paths in
 `Path=`, and de-duplicated names. Files on another filesystem go to that volume's
@@ -216,7 +256,10 @@ with `files/` and `info/`, a `DeletionDate` in local time, `%`-encoded paths in
 confirmation. Deleting an item that sits directly in a trash `files/` directory also removes
 its `.trashinfo`, so the trash count stays right. Both reply `{"t": "done", "results": [{"path": P, "ok": true}]}`. A successful `trash`
 result also carries `trashinfo`, the name of the `.trashinfo` entry it created, so the
-caller can hand that exact name back to `restore` and undo the deletion.
+caller can hand that exact name back to `restore` and undo the deletion. `restore`
+never replaces a file that is back at the original path (`EEXIST`), recreates missing
+parent folders safely, and refuses a `Path=` with `..`, or one outside the drive for a
+drive's trash, as `invalid trashinfo`. Its results carry the restored path.
 
 ### trashinfo, emptytrash
 
@@ -225,8 +268,9 @@ caller can hand that exact name back to `restore` and undo the deletion.
 {"id": N, "op": "emptytrash"}
 ```
 
-`trashinfo` replies `{"t": "trash", "count": C, "bytes": B, "items": [...], "infoDirs": [...]}`
-where each item is `{"name", "original", "deleted", "size", "kind"}`. The count comes from
+`trashinfo` replies `{"t": "trash", "count": C, "bytes": B, "infoDirs": [...]}`. With
+`"items": true` it also sends `items`, at most 5,000, where each item is
+`{"name", "original", "deleted", "size", "kind"}`; the shell does not ask for them. The count comes from
 the `.trashinfo` entries, not the files, so `infoDirs` lists the directories to `watch` to
 be told when the trash changes. There is one per trash root, so a removable drive with its
 own trash adds an entry and the list changes when that drive is mounted or unmounted.
@@ -268,7 +312,7 @@ partial write cannot leave the shell without a config.
 ```
 
 Each replies `done` with the resulting `path`, or `error`. `rename` refuses a `newName`
-containing a path separator.
+that is not a plain name (`EINVAL`) and never replaces an existing item (`EEXIST`).
 
 ### search
 
@@ -291,7 +335,8 @@ cross filesystem boundaries or follow symlinked directories.
 Replies `{"t": "peek", "text": S, "binary": B, "truncated": T, "size": N}` then `done`.
 Reads at most `limit` bytes, capped at 256 KB, for the preview. A file with a NUL byte
 in its first 8 KB, or one that is mostly not UTF-8, comes back with `binary: true` and
-empty `text`. A directory fails with `EISDIR`.
+empty `text`. A directory fails with `EISDIR`, and anything that is not a regular file,
+such as a pipe or a device, fails with `EINVAL` without being read.
 
 ### thumb
 
@@ -367,7 +412,9 @@ then `done`. Sourced from `lsblk -J -b -o ...` and `findmnt -J -b`. Both tools a
 of util-linux and are always present. A missing tool yields an empty list, never an
 error. `mountable` is true for an unmounted partition with a filesystem udisks can mount.
 Swap, LUKS, LVM and RAID members, and EFI, BIOS boot, Microsoft reserved and Windows
-recovery partitions are never mountable.
+recovery partitions are never mountable. Free space is read for every mount at once with
+a 1.5 second limit; a mount that does not answer is left without `free` and `total`, and
+keeps at most one waiting thread no matter how often drives are polled.
 
 ### mountdev, unmountdev
 
@@ -386,8 +433,9 @@ device, `EUNSUPPORTED` without udisksctl, `ETIMEDOUT`, and `EMOUNT` with udisks'
 {"id": N, "op": "extract", "path": "/home/me/Downloads/photos.zip"}
 ```
 
-Cancellable. Extracts the archive into a temporary folder next to it with `bsdtar -xvf`,
-then moves the result into place. While it runs it emits
+Cancellable. Opens the archive and a new private temporary folder next to it as handles,
+runs `bsdtar -xvf - -C /proc/self/fd/<folder>` with the archive on standard input, then
+moves the result into place without replacing anything. While it runs it emits
 `{"t": "progress", "bytes", "total", "files", "filesTotal": 0, "current", "rate"}` about four
 times a second: `bytes` is how far bsdtar has read into the archive, from its file position in
 `/proc/<pid>/fdinfo`, `total` is the archive size, and `files` counts entries extracted so far. A single
@@ -405,11 +453,13 @@ removed on failure.
 ```
 
 Cancellable. Every path must be absolute and in the same folder. `name` must end in `.zip`,
-`.tar.xz`, `.tar.gz` or `.7z`, which picks the format, and cannot contain a slash. Runs
-`bsdtar -a -cvf <temporary file> -C <folder> --null -T -` with the item names on standard input,
+`.tar.xz`, `.tar.gz` or `.7z`, which picks the format, and must be a plain name. Runs
+`bsdtar -cv --format <format> -f - -C /proc/self/fd/<folder> --null -T -`, with the folder
+as an open handle, the archive written to a new temporary file on standard output, and
+the item names on standard input,
 NUL separated, so no name is ever read as an option. Symlinks are stored as links, never
 followed. The finished archive is linked into place under `name`, or `name (1)`, `name (2)` and so
-on, so an existing file is never replaced. Emits `progress` like `extract`, where `bytes` and
+on, without replacing anything. Emits `progress` like `extract`, where `bytes` and
 `total` count the regular file bytes added so far and in all. Replies `done` with `path`.
 Errors: `EINVAL`, `ENOENT`, `EUNSUPPORTED` without bsdtar, `ECANCELED`, and `EFAIL` with the
 tool's message. The temporary file is removed on failure.

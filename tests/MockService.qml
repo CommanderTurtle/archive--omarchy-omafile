@@ -167,6 +167,12 @@ QtObject {
   property var systemClipboard: null
   property bool sameDrive: true
   function readSystemClipboard(onDone) { onDone(systemClipboard) }
+  property string clipboardText: ""
+  property var remoteRoots: []
+  function isRemotePath(p) { return remoteRoots.some(function (r) { return Model.isWithin(p, r) }) }
+  function resolveConflict(id, action, all, seq) { record("resolveConflict", [id, action, all, seq]) }
+  function transferOwner(id) { return null }
+  function readClipboardText(onText) { record("readClipboardText", []); Qt.callLater(function () { onText(mock.clipboardText) }) }
   function clearSystemClipboard() { record("clearSystemClipboard", []) }
   function clearClipboard() { record("clearClipboard", []); clipboard = { mode: "", paths: [] }; cutPaths = ({}) }
   function setClipboard(mode, paths) {

@@ -17,6 +17,7 @@ Item {
   property bool dirsFirst: true
   property string view: "list"
   property bool thumbnails: true
+  property bool picking: false
   property real viewScale: 1
   property var patterns: []
 
@@ -40,6 +41,8 @@ Item {
   property bool loading: false
   property string errorMessage: ""
   property int total: 0
+  property string realPath: ""
+  property bool truncated: false
 
   property var history: []
   property int historyIndex: -1
@@ -250,7 +253,7 @@ Item {
     pane.path = next
     reload()
     pane.navigated(next)
-    if (service) service.noteRecent(next)
+    if (service && !pane.picking) service.noteRecent(next)
   }
 
   function pushHistory(next) {
@@ -372,6 +375,8 @@ Item {
     errorMessage = ""
     loading = true
     total = 0
+    realPath = ""
+    truncated = false
     rebuildTimer.stop()
 
     if (_watchId) {
@@ -420,6 +425,8 @@ Item {
     errorMessage = ""
     loading = true
     total = 0
+    realPath = ""
+    truncated = false
     rebuildTimer.stop()
 
     var generation = ++pane._generation
@@ -435,6 +442,8 @@ Item {
         if (generation !== pane._generation) return
         pane.loading = false
         pane.total = Number(msg.total) || pane._pendingChunks.length
+        pane.realPath = typeof msg.real === "string" ? msg.real : ""
+        pane.truncated = msg.truncated === true
         pane.flushChunks()
         pane.statusChanged()
       },
@@ -666,7 +675,7 @@ Item {
   }
 
   function previewable(entry) {
-    if (!pane.thumbnails) return false
+    if (!pane.thumbnails || pane.picking) return false
     if (entry.isDir || entry.isBroken) return false
     if (entry.size <= 0 || entry.size > 24000000) return false
     var e = entry.ext

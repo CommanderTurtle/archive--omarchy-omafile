@@ -23,6 +23,8 @@ Item {
   property bool helperReady: false
   property string helperError: ""
   property int helperRestarts: 0
+  property bool helperGaveUp: false
+  readonly property int helperRestartLimit: 8
 
   property var transfers: []
   property var clipboard: ({ mode: "", paths: [] })
@@ -158,8 +160,14 @@ Item {
     body.id = id
     var entry = handlers || ({})
     entry._op = String(payload.op || "")
+    if (helperGaveUp) {
+      Qt.callLater(function () {
+        if (entry.onError) entry.onError({ id: id, t: "error", code: "EHELPER", message: root.helperError || "File helper stopped" })
+      })
+      return id
+    }
     _pending[id] = entry
-    var line = JSON.stringify(body) + "\n"
+    var line = Model.escapeLoneSurrogates(JSON.stringify(body)) + "\n"
     if (helperReady && helper.running) helper.write(line)
     else {
       _queue.push(line)
@@ -178,7 +186,7 @@ Item {
   }
 
   function sendRaw(payload) {
-    var line = JSON.stringify(payload) + "\n"
+    var line = Model.escapeLoneSurrogates(JSON.stringify(payload)) + "\n"
     if (helperReady && helper.running) helper.write(line)
     else {
       _queue.push(line)
@@ -207,16 +215,34 @@ Item {
     })
     _pending = ({})
     _thumbWaiting = ({})
-    if (helperRestarts < 8) {
+    _trashWatches = ({})
+    _transferOwners = ({})
+    _drivesPending = false
+    var stopped = false
+    var next = transfers.map(function (t) {
+      if (!root.transferActive(t)) return t
+      stopped = true
+      var copy = {}
+      for (var k in t) copy[k] = t[k]
+      copy.state = "failed"
+      copy.message = "The file helper stopped"
+      copy.finishedMs = Date.now()
+      return copy
+    })
+    if (stopped) transfers = next
+    helperStable.stop()
+    if (helperRestarts < helperRestartLimit) {
       helperRestarts++
       restartTimer.restart()
     } else {
+      helperGaveUp = true
+      _queue = []
       helperError = "File helper stopped unexpectedly"
     }
   }
 
   function ensureHelper() {
-    if (helper.running) return
+    if (helper.running || helperGaveUp || restartTimer.running) return
     helper.running = true
   }
 
@@ -508,15 +534,25 @@ Item {
     })
   }
 
+  readonly property int clipboardPathLimit: 20000
+
   function readSystemClipboard(onDone) {
     var revision = _clipboardRevision
     return request({ op: "clipget" }, {
       onDone: function (m) {
-        var result = { mode: String(m.mode || "copy"), paths: m.paths || [], image: String(m.image || "") }
+        var paths = (m.paths || []).slice(0, clipboardPathLimit)
+        var result = { mode: String(m.mode || "copy"), paths: paths, image: String(m.image || "") }
         if (revision === root._clipboardRevision) root.clipboard = result
         onDone(result)
       },
       onError: function () { onDone(null) }
+    })
+  }
+
+  function readClipboardText(onText) {
+    return request({ op: "cliptext" }, {
+      onDone: function (m) { onText(String(m.text || "")) },
+      onError: function () {}
     })
   }
 
@@ -553,7 +589,13 @@ Item {
     onTriggered: root.readSystemClipboard(function () {})
   }
 
-  function beginTransfer(op, sources, dest, conflict) {
+  property var _transferOwners: ({})
+
+  function transferOwner(id) {
+    return _transferOwners[id] || null
+  }
+
+  function beginTransfer(op, sources, dest, conflict, owner) {
     var label = sources.length === 1 ? Model.basename(sources[0]) : sources.length + " items"
     var record = {
       id: 0, op: op, label: label, dest: dest, state: "running",
@@ -574,27 +616,28 @@ Item {
         }
       },
       onDone: function (m) {
+        delete root._transferOwners[m.id]
         updateTransfer(m.id, {
           state: "done", errors: m.errors || [],
           copied: Number(m.copied) || 0, skipped: Number(m.skipped) || 0
         })
-        if ((Number(m.copied) || 0) > 0) {
-          var created = []
-          for (var i = 0; i < sources.length; i++)
-            created.push(Model.joinPath(dest, Model.basename(sources[i])))
+        var made = root.createdPairs(m.created)
+        if (made.length > 0) {
           root.recordUndo({
-            kind: op, sources: sources.slice(), dest: dest, created: created,
-            label: (op === "move" ? "Move " : "Copy ") + Model.formatCount(sources.length, "item", "items")
+            kind: op, sources: made.map(function (c) { return c.source }), dest: dest, created: made,
+            label: (op === "move" ? "Move " : "Copy ") + Model.formatCount(made.length, "item", "items")
           })
         }
         trimTransferHistory()
         refreshTrash()
       },
       onError: function (m) {
+        delete root._transferOwners[m.id]
         updateTransfer(m.id, { state: m.code === "ECANCELED" ? "cancelled" : "failed", message: String(m.message || "") })
         trimTransferHistory()
       }
     })
+    if (owner) _transferOwners[id] = owner
     record.id = id
     var next = transfers.slice()
     next.push(record)
@@ -602,8 +645,8 @@ Item {
     return id
   }
 
-  function resolveConflict(jobId, action, applyAll) {
-    sendRaw({ id: jobId, op: "resolve", action: action, applyAll: applyAll === true })
+  function resolveConflict(jobId, action, applyAll, seq) {
+    sendRaw({ id: jobId, op: "resolve", action: action, applyAll: applyAll === true, seq: Number(seq) })
     updateTransfer(jobId, { state: action === "cancel" ? "cancelled" : "running" })
   }
 
@@ -722,15 +765,89 @@ Item {
     }, onError)
   }
 
+  function createdPairs(list) {
+    var out = []
+    var items = list || []
+    for (var i = 0; i < items.length; i++) {
+      var c = items[i]
+      if (c && typeof c.path === "string" && c.path && typeof c.source === "string" && c.source)
+        out.push({ source: c.source, path: c.path })
+    }
+    return out
+  }
+
+  function createdPaths(entry) {
+    return (entry.created || []).map(function (c) { return String(c.path) })
+  }
+
+  function okPaths(m) {
+    var out = []
+    var results = (m && m.results) || []
+    for (var i = 0; i < results.length; i++) if (results[i].ok) out.push(String(results[i].path))
+    return out
+  }
+
+  function trashNames(m) {
+    var out = []
+    var results = (m && m.results) || []
+    for (var i = 0; i < results.length; i++) if (results[i].ok && results[i].trashinfo) out.push(String(results[i].trashinfo))
+    return out
+  }
+
+  function moveBack(entry, onDone, onError) {
+    var groups = {}
+    var order = []
+    var made = entry.created || []
+    for (var i = 0; i < made.length; i++) {
+      var dir = Model.dirname(String(made[i].source))
+      if (!groups[dir]) {
+        groups[dir] = []
+        order.push(dir)
+      }
+      groups[dir].push(String(made[i].path))
+    }
+    if (order.length === 0) {
+      if (onError) onError({ message: "Cannot undo that" })
+      return
+    }
+    var left = order.length
+    var back = []
+    var failed = null
+    function finish() {
+      if (--left > 0) return
+      entry.sources = back
+      entry.created = []
+      if (failed && back.length === 0) {
+        if (onError) onError(failed)
+      } else onDone({})
+    }
+    for (var g = 0; g < order.length; g++) {
+      request({ op: "move", sources: groups[order[g]], dest: order[g], conflict: "rename" }, {
+        onDone: function (m) {
+          back = back.concat(root.createdPairs(m.created).map(function (c) { return c.path }))
+          finish()
+        },
+        onError: function (m) {
+          failed = m
+          finish()
+        }
+      })
+    }
+  }
+
   function applyReverse(entry, onDone, onError) {
     if (entry.kind === "trash")
-      request({ op: "restore", items: entry.trashinfo }, { onDone: function (m) { refreshTrash(); onDone(m) }, onError: onError })
+      request({ op: "restore", items: entry.trashinfo }, { onDone: function (m) {
+        entry.paths = root.okPaths(m)
+        refreshTrash()
+        onDone(m)
+      }, onError: onError })
     else if (entry.kind === "rename")
       request({ op: "rename", path: entry.to, newName: Model.basename(entry.from) }, { onDone: onDone, onError: onError })
     else if (entry.kind === "move")
-      request({ op: "move", sources: entry.created, dest: Model.dirname(entry.sources[0]), conflict: "rename" }, { onDone: onDone, onError: onError })
+      moveBack(entry, onDone, onError)
     else if (entry.kind === "copy")
-      request({ op: "trash", paths: entry.created }, { onDone: function (m) { refreshTrash(); onDone(m) }, onError: onError })
+      request({ op: "trash", paths: createdPaths(entry) }, { onDone: function (m) { refreshTrash(); onDone(m) }, onError: onError })
     else if (entry.kind === "create")
       request({ op: "trash", paths: [entry.path] }, { onDone: function (m) { refreshTrash(); onDone(m) }, onError: onError })
     else if (onError) onError({ message: "Cannot undo that" })
@@ -738,13 +855,18 @@ Item {
 
   function applyForward(entry, onDone, onError) {
     if (entry.kind === "trash")
-      request({ op: "trash", paths: entry.paths }, { onDone: function (m) { refreshTrash(); onDone(m) }, onError: onError })
+      request({ op: "trash", paths: entry.paths }, { onDone: function (m) {
+        entry.trashinfo = root.trashNames(m)
+        refreshTrash()
+        onDone(m)
+      }, onError: onError })
     else if (entry.kind === "rename")
       request({ op: "rename", path: entry.from, newName: Model.basename(entry.to) }, { onDone: onDone, onError: onError })
-    else if (entry.kind === "move")
-      request({ op: "move", sources: entry.sources, dest: entry.dest, conflict: "rename" }, { onDone: onDone, onError: onError })
-    else if (entry.kind === "copy")
-      request({ op: "copy", sources: entry.sources, dest: entry.dest, conflict: "rename" }, { onDone: onDone, onError: onError })
+    else if (entry.kind === "move" || entry.kind === "copy")
+      request({ op: entry.kind, sources: entry.sources, dest: entry.dest, conflict: "rename" }, { onDone: function (m) {
+        entry.created = root.createdPairs(m.created)
+        onDone(m)
+      }, onError: onError })
     else if (entry.kind === "create")
       request({ op: entry.isDir ? "mkdir" : "mkfile", path: entry.path }, { onDone: onDone, onError: onError })
     else if (onError) onError({ message: "Cannot redo that" })
@@ -825,13 +947,19 @@ Item {
     onTriggered: root.refreshTrash()
   }
 
+  property bool _drivesPending: false
+
   function refreshDrives() {
+    if (_drivesPending) return
+    _drivesPending = true
     request({ op: "drives" }, {
       onData: function (m) {
         if (m.t !== "drives") return
         var next = m.drives || []
         if (JSON.stringify(next) !== JSON.stringify(root.drives)) root.drives = next
-      }
+      },
+      onDone: function () { root._drivesPending = false },
+      onError: function () { root._drivesPending = false }
     })
   }
 
@@ -955,6 +1083,20 @@ Item {
     request({ op: "netdiscover" }, {
       onData: function (m) { if (m.t === "drives") root.discovered = m.drives || [] }
     })
+  }
+
+  function isRemotePath(path) {
+    var p = String(path || "")
+    if (!p) return false
+    var runtime = Quickshell.env("XDG_RUNTIME_DIR") || ""
+    if (runtime && Model.isWithin(p, runtime + "/gvfs")) return true
+    for (var i = 0; i < drives.length; i++) {
+      var d = drives[i]
+      if (!d || !d.mount) continue
+      var remote = d.network === true || String(d.fstype || "").indexOf("fuse") === 0
+      if (remote && Model.isWithin(p, String(d.mount))) return true
+    }
+    return false
   }
 
   function networkMounts() {
@@ -1371,7 +1513,7 @@ Item {
       return "invalid request"
     }
     if (!parsed || typeof parsed.result !== "string" || parsed.result === "") return "result path required"
-    if (pickRequest) writePickResult(pickRequest.result, { ok: false })
+    if (pickRequest && String(pickRequest.result) !== parsed.result) return "error: another app is already choosing a file"
     pickRequest = parsed
     return "ok"
   }
@@ -1505,8 +1647,10 @@ Item {
       if (running) {
         root.helperReady = true
         root.helperError = ""
+        helperStable.restart()
         Qt.callLater(root.drainQueue)
         Qt.callLater(root.refreshBookmarks)
+        if (root.helperRestarts > 0) Qt.callLater(root.refreshTrash)
       } else {
         root.helperReady = false
       }
@@ -1564,6 +1708,13 @@ Item {
       }
       root.refreshFilePicker()
     }
+  }
+
+  property Timer helperStable: Timer {
+    id: helperStable
+    interval: 60000
+    repeat: false
+    onTriggered: root.helperRestarts = 0
   }
 
   property Timer restartTimer: Timer {

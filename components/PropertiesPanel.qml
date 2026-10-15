@@ -322,7 +322,7 @@ Column {
                   objectName: "changeOpenerLoader"
                   anchors.fill: parent
                   active: panel.choosingOpener && infoRow.modelData.opener === true
-                  sourceComponent: SearchableDropdown {
+                  sourceComponent: AppChooser {
                     objectName: "changeOpener"
                     showLabel: false
                     triggerLabel: "Choose an application"

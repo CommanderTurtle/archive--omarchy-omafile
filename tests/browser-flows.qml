@@ -882,23 +882,43 @@ ShellRoot {
         return out
       }
 
-      function test_5c_hiddenInputsAreReadOnly() {
+      function test_5c_inputsNeverLetQtReadTheClipboard() {
         waitRows()
         verify(textInputs(browser, []).length >= 13, "found the text inputs")
-        compare(editableInputs().length, 0, "nothing is editable while every editor is closed")
+        compare(editableInputs().length, 0, "nothing is editable to Qt while every editor is closed")
 
         keyClick(Qt.Key_L, Qt.ControlModifier)
-        tryVerify(function () { return editableInputs().length === 1 && editableInputs()[0].activeFocus }, 3000, "the path editor is editable while open")
-        compare(editableHidden(), [])
+        tryVerify(function () { return browser.activePane() && textInputs(browser, []).some(function (t) { return t.visible && t.activeFocus }) }, 3000, "the path editor takes focus")
+        compare(editableInputs().length, 0, "the open path editor stays read only to Qt")
         keyClick(Qt.Key_Escape)
-        tryVerify(function () { return editableInputs().length === 0 }, 3000, "and read only again once closed")
 
+        mock.calls = []
         browser.showDialog("newfolder", "New folder", "", null)
         var field = findChild(browser, "dialogField")
-        tryVerify(function () { return field.visible && !field.readOnly }, 3000, "a dialog field is editable while its dialog is open")
-        compare(editableHidden(), [])
+        tryVerify(function () { return field.visible && field.activeFocus }, 3000)
+        verify(field.readOnly, "an open dialog field stays read only to Qt")
+        keyClick(Qt.Key_A)
+        keyClick("B")
+        keyClick(Qt.Key_C)
+        compare(field.text, "aBc", "typing still edits the field")
+        keyClick(Qt.Key_Backspace)
+        compare(field.text, "aB")
+        keyClick(Qt.Key_Left)
+        keyClick(Qt.Key_Delete)
+        compare(field.text, "a")
+        keyClick(Qt.Key_Z, Qt.ControlModifier)
+        compare(field.text, "aB", "undo brings the last edit back")
+        keyClick(Qt.Key_Z, Qt.ControlModifier | Qt.ShiftModifier)
+        compare(field.text, "a", "and redo removes it again")
+        mock.clipboardText = "x\ny"
+        keyClick(Qt.Key_V, Qt.ControlModifier)
+        tryCompare(field, "text", "ax y", 3000, "paste goes through the helper and stays on one line")
+        verify(mock.called("readClipboardText") !== null, "paste asks the helper for bounded clipboard text")
+        keyClick(Qt.Key_A, Qt.ControlModifier)
+        keyClick(Qt.Key_Backspace)
+        compare(field.text, "", "select all and delete clears the field")
         browser.closeDialog()
-        tryVerify(function () { return field.readOnly && editableInputs().length === 0 }, 3000, "and read only once it closes")
+        compare(editableInputs().length, 0)
 
         var saved = mock.statItems
         mock.statItems = { "/tmp/alpha.yml": { kind: "f", size: 30, mtime: 300, atime: 300, ctime: 300,
@@ -906,14 +926,16 @@ ShellRoot {
         browser.showProperties(Model.decodeEntry(["alpha.yml", "f", 30, 300, 420, null], "/tmp"))
         tryVerify(function () { return shownChild("changeOpenerButton") !== null && shownChild("changeOpenerButton").visible }, 3000)
         compare(namedChildren("changeOpener").length, 0, "the app search is not created until it is needed")
-        compare(editableInputs().length, 0)
         shownChild("changeOpenerButton").clicked()
         tryVerify(function () { var d = shownChild("changeOpener"); return d !== null && d.popupOpen }, 3000, "clicking opens the app search")
-        compare(namedChildren("changeOpener").length, 1, "only the Opens with row gets one")
-        wait(500)
+        var search = findChild(shownChild("changeOpener"), "appChooserSearch")
+        verify(search !== null, "the app search uses the safe field")
+        tryVerify(function () { return search.activeFocus }, 3000)
+        verify(search.readOnly, "the app search stays read only to Qt")
+        keyClick(Qt.Key_Z)
+        compare(search.text, "z")
         shownChild("changeOpener").close()
         tryVerify(function () { return namedChildren("changeOpener").length === 0 }, 3000, "closing the list removes it again")
-        verify(shownChild("changeOpenerButton").visible)
         browser.closeDialog()
         mock.statItems = saved
         compare(editableInputs().length, 0)
@@ -1069,6 +1091,8 @@ ShellRoot {
         mouseClick(findChild(browser, "pickAccept"))
         compare(mock.called("finishPick").args[0].paths[0], "/tmp/new.txt")
         mock.calls = []
+        var savedStat = mock.statItems
+        mock.statItems = { "/tmp/alpha.yml": { kind: "f", size: 30, linkTarget: null } }
         browser.pickerRequest = { mode: "save", result: "/run/z.json", currentFolder: "/tmp", currentName: "alpha.yml" }
         browser.beginPickSession()
         tryVerify(function () { return !pane().loading && pane().rows.length === 3 })
@@ -1080,6 +1104,21 @@ ShellRoot {
         mouseClick(findChild(browser, "pickAccept"))
         keyClick(Qt.Key_Return)
         compare(mock.called("finishPick").args[0].paths[0], "/tmp/alpha.yml")
+        mock.calls = []
+        mock.statItems = { "/tmp/.hidden.txt": { kind: "f", size: 1, linkTarget: null } }
+        browser.pickerRequest = { mode: "save", result: "/run/h.json", currentFolder: "/tmp", currentName: ".hidden.txt" }
+        browser.beginPickSession()
+        tryVerify(function () { return !pane().loading && pane().rows.length === 3 })
+        mouseClick(findChild(browser, "pickAccept"))
+        compare(mock.called("finishPick"), null, "a hidden file that is not in the view still asks before replacing")
+        keyClick(Qt.Key_Escape)
+        mock.statItems = { "/tmp/link.txt": { kind: "l", size: 1, linkTarget: "/etc/passwd" } }
+        findChild(browser, "pickNameField").text = "link.txt"
+        browser.acceptPick(null)
+        compare(mock.called("finishPick"), null, "saving over a link is refused")
+        verify(browser.statusText.indexOf("is a link") >= 0)
+        browser.cancelPick()
+        mock.statItems = savedStat
         mock.calls = []
         browser.pickerRequest = { mode: "open", result: "/run/w.json" }
         browser.beginPickSession()
@@ -1476,6 +1515,61 @@ ShellRoot {
         compare(mock.called("finishPick").args[0].paths, ["/tmp/untitled folder"])
         pane().navigate("/tmp")
         waitRows()
+      }
+
+      function test_8d_pickerBlocksRiskyActions() {
+        mock.calls = []
+        browser.pickerRequest = { mode: "open", result: "/run/g.json", currentFolder: "/tmp", appId: "org.example.App" }
+        browser.beginPickSession()
+        waitRows()
+        verify(browser.pickTitle().indexOf("(for org.example.App)") > 0, "the chooser names the app that asked")
+        verify(pane().picking, "the panes know they are picking, so no thumbnails are made")
+        pane().setCursor(0, false, false)
+        keyClick(Qt.Key_Delete)
+        compare(mock.called("trashPaths"), null, "Delete does nothing while picking")
+        verify(!findChild(browser, "confirmDialog") || !browser.confirmAction)
+        keyClick(Qt.Key_Delete, Qt.ShiftModifier)
+        compare(mock.called("deletePaths"), null)
+        keyClick(Qt.Key_V, Qt.ControlModifier)
+        browser.handleDrop(["file:///home/me/secret.txt"], "/tmp/docs", null)
+        compare(mock.called("beginTransfer"), null, "paste and drop do not move files into the app's folder")
+        keyClick(Qt.Key_F2)
+        compare(browser.dialogMode, "", "rename is off")
+        browser.runAction("properties")
+        compare(browser.dialogMode, "", "properties is off")
+        var keys = browser.contextActions(pane().cursorEntry()).map(function (a) { return a.key })
+        verify(keys.indexOf("trash") < 0 && keys.indexOf("delete") < 0 && keys.indexOf("paste") < 0 && keys.indexOf("properties") < 0)
+        verify(keys.indexOf("open") >= 0 && keys.indexOf("copy") >= 0)
+        browser.acceptPick([Model.decodeEntry(["link.txt", "l", 1, 0, 0, "/etc/passwd"], "/tmp")])
+        compare(mock.called("finishPick"), null, "a linked file is not handed to the app")
+        verify(browser.statusText.indexOf("is a link") >= 0)
+        browser.cancelPick()
+        verify(!pane().picking)
+      }
+
+      function test_8e_conflictsWaitAndIgnoreEarlyKeys() {
+        waitRows()
+        mock.calls = []
+        browser.showDialog("newfolder", "New folder", "draft", null)
+        mock.conflictRaised(5, { dest: "/tmp/alpha.yml", seq: 3 })
+        compare(browser.dialogMode, "newfolder", "a conflict does not replace an open dialog")
+        browser.closeDialog()
+        tryCompare(browser, "dialogMode", "conflict")
+        keyClick(Qt.Key_R)
+        compare(mock.called("resolveConflict"), null, "keys typed right as it appears are ignored")
+        wait(browser.conflictKeyDelay + 100)
+        keyClick(Qt.Key_R)
+        compare(mock.called("resolveConflict").args, [5, "overwrite", false, 3], "the answer carries the conflict number")
+        compare(browser.dialogMode, "")
+      }
+
+      function test_8f_networkAudioIsNotPlayedInTheShell() {
+        mock.remoteRoots = ["/mnt/nas"]
+        browser.showPreview(Model.decodeEntry(["song.mp3", "f", 1000, 100, 420, null], "/mnt/nas"))
+        compare(browser.previewKind, "remoteaudio")
+        compare(findChild(browser, "audioPreviewLoader").active, false)
+        browser.closePreview()
+        mock.remoteRoots = []
       }
 
       function test_zz_done() {

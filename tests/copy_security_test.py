@@ -118,13 +118,18 @@ class CopySecurityTests(CopyFixture):
         real_rename = self.helper.os.rename
 
         def cross_drive(*args, **kwargs):
+            if os.fsencode(args[0]).startswith(b".omafile-part-"):
+                return (real_noreplace if len(args) == 4 else real_rename)(*args, **kwargs)
             raise OSError(errno.EXDEV, "Invalid cross-device link")
 
+        real_noreplace = self.helper.rename_noreplace
         self.helper.os.rename = cross_drive
+        self.helper.rename_noreplace = cross_drive
         try:
             done = self.run_op([self.path("shared", "album")], self.path("dest"), is_move=True)
         finally:
             self.helper.os.rename = real_rename
+            self.helper.rename_noreplace = real_noreplace
             os.chmod(self.path("shared", "album", "locked.jpg"), stat.S_IRUSR | stat.S_IWUSR)
         self.assertEqual(len(done["errors"]), 1)
         self.assertTrue(os.path.exists(self.path("shared", "album", "locked.jpg")), "nothing is lost")

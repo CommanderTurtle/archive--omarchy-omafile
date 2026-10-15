@@ -63,6 +63,12 @@ DEFAULT_TITLES = {"open": "Open File", "save": "Save File", "savefiles": "Save F
 RESPONSE_OK = 0
 RESPONSE_CANCELLED = 1
 RESPONSE_ERROR = 2
+MAX_FILTERS = 32
+MAX_PATTERNS = 64
+MAX_PATTERN_LENGTH = 64
+MAX_NAME_LENGTH = 256
+MAX_SAVE_FILES = 1000
+APP_ID_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
 
 
 def decode_bytes(value):
@@ -124,9 +130,11 @@ def convert_filter(portal_filter):
         else:
             found = mime_globs(value)
         for pattern in found:
-            if pattern not in patterns:
+            if len(patterns) >= MAX_PATTERNS:
+                break
+            if len(pattern) <= MAX_PATTERN_LENGTH and pattern not in patterns:
                 patterns.append(pattern)
-    return {"name": str(name), "patterns": patterns}
+    return {"name": str(name)[:MAX_NAME_LENGTH], "patterns": patterns}
 
 
 def same_filter(a, b):
@@ -135,7 +143,7 @@ def same_filter(a, b):
 
 
 def portal_filters(options):
-    filters = [tuple(f) for f in (options.get("filters") or [])]
+    filters = [tuple(f) for f in (options.get("filters") or [])][:MAX_FILTERS]
     current = options.get("current_filter")
     index = -1
     if current:
@@ -163,10 +171,37 @@ def valid_request(mode, options):
     if mode != "savefiles":
         return True
     names = [f for f in save_file_names(options) if f]
-    return all(plain_name(n) for n in names) and len(set(names)) == len(names)
+    return (len(names) <= MAX_SAVE_FILES and all(plain_name(n) for n in names)
+            and len(set(names)) == len(names))
 
 
-def build_request(mode, title, options, result_path):
+def clean_app_id(app_id):
+    text = str(app_id or "")
+    return text if 0 < len(text) <= 255 and set(text) <= APP_ID_CHARS else ""
+
+
+def free_names(folder, names):
+    taken = set()
+    out = [None] * len(names)
+    for i, name in enumerate(names):
+        if name not in taken and not os.path.lexists(os.path.join(folder, name)):
+            taken.add(name)
+            out[i] = name
+    for i, name in enumerate(names):
+        if out[i] is not None:
+            continue
+        stem, ext = os.path.splitext(name)
+        n = 1
+        candidate = "%s (%d)%s" % (stem, n, ext)
+        while candidate in taken or os.path.lexists(os.path.join(folder, candidate)):
+            n += 1
+            candidate = "%s (%d)%s" % (stem, n, ext)
+        taken.add(candidate)
+        out[i] = candidate
+    return out
+
+
+def build_request(mode, title, options, result_path, app_id=""):
     filters, current_index = portal_filters(options)
     current_folder = decode_bytes(options.get("current_folder"))
     current_file = decode_bytes(options.get("current_file")) if mode == "save" else ""
@@ -193,6 +228,7 @@ def build_request(mode, title, options, result_path):
         "files": files,
         "filters": [convert_filter(f) for f in filters],
         "currentFilter": current_index,
+        "appId": clean_app_id(app_id),
         "result": result_path,
     }
 
@@ -225,9 +261,9 @@ def parse_result(data, mode, options):
         else:
             return RESPONSE_ERROR, {}
         if folder is not None:
-            if not os.path.isdir(folder):
+            if os.path.islink(folder) or not os.path.isdir(folder):
                 return RESPONSE_ERROR, {}
-            paths = [os.path.join(folder, name) for name in files]
+            paths = [os.path.join(folder, name) for name in free_names(folder, files)]
             if any(os.path.dirname(p) != folder for p in paths):
                 return RESPONSE_ERROR, {}
     elif mode == "save":
@@ -236,6 +272,8 @@ def parse_result(data, mode, options):
             return RESPONSE_ERROR, {}
     elif not options.get("multiple", False):
         paths = paths[:1]
+    if mode != "savefiles" and any(os.path.islink(p) for p in paths):
+        return RESPONSE_ERROR, {}
     results = {"uris": [GLib.filename_to_uri(p, None) for p in paths], "choices": []}
     filters, _ = portal_filters(options)
     index = data.get("filter", -1)
@@ -436,6 +474,7 @@ class Portal:
                 "org.freedesktop.DBus.Error.UnknownMethod", "Unknown method " + method)
             return
         handle = params.get_child_value(0).get_string()
+        app_id = params.get_child_value(1).get_string()
         title = params.get_child_value(3).get_string()
         options = unpack_options(params.get_child_value(4))
         try:
@@ -447,7 +486,7 @@ class Portal:
         if not valid_request(mode, options):
             invocation.return_value(GLib.Variant("(ua{sv})", (RESPONSE_ERROR, {})))
             return
-        request = build_request(mode, title, options, result_path)
+        request = build_request(mode, title, options, result_path, app_id)
         pick = Pick(self, invocation, handle, mode, options, result_path)
         self.pending.append(pick)
         pick.start(request)

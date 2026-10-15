@@ -18,8 +18,12 @@ jobs:
       MARKETPLACE: omacom/omarchy-plugin-marketplace
       GH_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
       HEAD_SHA: ${{ github.sha }}
+      OWNER: ${{ github.repository_owner }}
+      REPO_URL: https://github.com/${{ github.repository }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Skip without a token
         id: token
@@ -43,8 +47,8 @@ jobs:
 
           out = subprocess.run(
               ["gh", "issue", "list", "-R", marketplace, "--state", "open",
-               "--search", "%s in:title" % name,
-               "--limit", "20", "--json", "number,title,labels,body"],
+               "--search", "%s in:title" % name, "--author", os.environ["OWNER"],
+               "--limit", "20", "--json", "number,title,labels,body,author"],
               capture_output=True, text=True, check=False)
           issues = json.loads(out.stdout or "[]")
 
@@ -52,6 +56,10 @@ jobs:
           for issue in issues:
               title = issue.get("title", "")
               if not title.startswith("[Plugin]: %s" % name):
+                  continue
+              if (issue.get("author") or {}).get("login", "").lower() != os.environ["OWNER"].lower():
+                  continue
+              if os.environ["REPO_URL"].lower() not in (issue.get("body") or "").lower():
                   continue
               labels = [l["name"] for l in issue.get("labels", [])]
               if "approved-and-verified" in labels or "maintainer-verified" in labels:

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import json
 import os
-import shutil
 import subprocess
 import sys
 
@@ -15,6 +14,8 @@ PORTAL_BODY = (
     "Interfaces=org.freedesktop.impl.portal.FileChooser;\n" % BUS_NAME)
 SYSTEM_PORTAL = "/usr/share/xdg-desktop-portal/portals/omafile.portal"
 PORTAL_BIN = os.path.join(os.path.dirname(os.path.realpath(__file__)), "omafile-portal")
+INSTALL_BIN = "/usr/bin/install"
+ELEVATORS = (("/usr/bin/pkexec", False), ("/usr/bin/sudo", True))
 
 
 def home():
@@ -32,7 +33,9 @@ def service_path():
 
 
 def service_body():
-    return "[D-BUS Service]\nName=%s\nExec=%s\n" % (BUS_NAME, PORTAL_BIN)
+    if any(c in PORTAL_BIN for c in "\"\\$`'") or not PORTAL_BIN.isprintable():
+        raise RuntimeError("the plugin folder path has characters a D-Bus service file cannot hold")
+    return "[D-BUS Service]\nName=%s\nExec=\"%s\"\n" % (BUS_NAME, PORTAL_BIN)
 
 
 def is_section(line):
@@ -165,13 +168,14 @@ def install_system_file():
         return
     if skip_system():
         return
-    if shutil.which("pkexec"):
-        prefix = ["pkexec"]
-    elif shutil.which("sudo") and sys.stdin.isatty():
-        prefix = ["sudo"]
-    else:
+    prefix = None
+    for program, needs_tty in ELEVATORS:
+        if os.access(program, os.X_OK) and (not needs_tty or sys.stdin.isatty()):
+            prefix = [program]
+            break
+    if prefix is None:
         raise RuntimeError("need pkexec or sudo to install %s" % SYSTEM_PORTAL)
-    result = subprocess.run(prefix + ["install", "-Dm644", "/dev/stdin", SYSTEM_PORTAL],
+    result = subprocess.run(prefix + [INSTALL_BIN, "-Dm644", "/dev/stdin", SYSTEM_PORTAL],
                             input=PORTAL_BODY, text=True, shell=False)
     if result.returncode != 0 or read_text(SYSTEM_PORTAL) != PORTAL_BODY:
         raise RuntimeError("could not install %s" % SYSTEM_PORTAL)

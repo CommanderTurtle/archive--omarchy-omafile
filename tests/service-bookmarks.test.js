@@ -19,7 +19,9 @@ function service(saved = {}) {
     _bookmarkGeneration: 0, _stateLoaded: false, recent: [], hiddenDrives: [], placeOrder: {}, servers: [],
     serverSettings: {}, folderViews: {}, previousFileManager: '', session: null, _queue: [], _pending: {},
     helperRestarts: 0, helperReady: true, helperError: '', _thumbWaiting: {},
-    restartTimer: { restart() {} }, bookmarkReloadTimer: { restart() {} },
+    restartTimer: { restart() {}, running: false }, bookmarkReloadTimer: { restart() {} },
+    helperStable: { stop() {} }, helperRestartLimit: 8, helperGaveUp: false, transfers: [],
+    _trashWatches: {}, _transferOwners: {}, _drivesPending: false,
     stateFile: { setText(text) { writes.push(JSON.parse(text)); } },
     Model: { basename(value) { return path.basename(value); }, rememberPlaceOrder: Model.rememberPlaceOrder, cleanPlaceOrder: Model.cleanPlaceOrder }
   });
@@ -149,4 +151,22 @@ test('a damaged place order in the state file is cleaned when it loads', () => {
   assert.deepEqual(plain(loaded.context.placeOrderFor('drives')), []);
   assert.deepEqual(plain(loaded.context.placeOrderFor('places')), ['root', 'home']);
   assert.deepEqual(plain(loaded.context.placeOrderFor('sections')), ['network']);
+});
+
+test('a helper crash fails running transfers, drops trash watches and stops restarting at the limit', () => {
+  const { context: c } = service();
+  c.transferActive = t => t.state === 'running' || t.state === 'paused';
+  c.transfers = [{ id: 1, state: 'running' }, { id: 2, state: 'done' }];
+  c._trashWatches = { '/t/info': 5 };
+  c.handleHelperExit();
+  assert.equal(c.transfers[0].state, 'failed');
+  assert.equal(c.transfers[1].state, 'done');
+  assert.deepEqual(plain(c._trashWatches), {});
+  c.helperRestarts = 8;
+  c.handleHelperExit();
+  assert.equal(c.helperGaveUp, true);
+  let started = false;
+  c.helper = { get running() { return false; }, set running(v) { started = v; } };
+  c.ensureHelper();
+  assert.equal(started, false, 'no restart after the limit');
 });

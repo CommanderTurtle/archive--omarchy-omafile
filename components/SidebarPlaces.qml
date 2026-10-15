@@ -278,7 +278,10 @@ Item {
   signal bookmarkDropped(var paths)
 
   function acceptsBookmark(drag) {
-    var paths = dropPaths(drag)
+    if (!drag || !drag.hasUrls) return false
+    var source = drag.source
+    if (!source || !source.view || typeof source.view.dragUriList !== "string") return true
+    var paths = Model.localPathsFromUrls(source.view.dragUriList.split(/\r?\n/).filter(function (line) { return line && line.charAt(0) !== "#" }))
     if (paths.length === 0) return false
     var pinned = service ? service.pinned : []
     for (var i = 0; i < paths.length; i++) if (pinned.indexOf(paths[i]) < 0) return true

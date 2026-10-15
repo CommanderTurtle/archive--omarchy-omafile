@@ -665,6 +665,22 @@ function sortRaw(rows, sortBy, descending, dirsFirst) {
   return out;
 }
 
+var shellNames = { sh: true, bash: true, dash: true, zsh: true, ksh: true, mksh: true, ash: true, busybox: true };
+
+function shellQuote(text) {
+  return "'" + String(text).replace(/'/g, "'\\''") + "'";
+}
+
+function isShellScriptArg(args, index) {
+  if (index < 2 || String(args[index - 1]) !== '-c') return false;
+  for (var i = 0; i < index - 1; i++) {
+    var word = String(args[i]);
+    var base = word.substring(word.lastIndexOf('/') + 1);
+    if (shellNames[base]) return true;
+  }
+  return false;
+}
+
 function expandFieldCodes(command, path) {
   var out = [];
   var target = path === undefined || path === null ? '' : String(path);
@@ -672,6 +688,7 @@ function expandFieldCodes(command, path) {
   var length = command && command.length ? command.length : 0;
   for (var i = 0; i < length; i++) {
     var arg = String(command[i]);
+    var inScript = isShellScriptArg(command, i);
     var built = '';
     for (var j = 0; j < arg.length; j++) {
       var ch = arg.charAt(j);
@@ -690,7 +707,7 @@ function expandFieldCodes(command, path) {
         continue;
       }
       if (code === 'f' || code === 'F' || code === 'u' || code === 'U') {
-        built += target;
+        built += inScript ? shellQuote(target) : target;
         used = true;
       }
     }
@@ -752,27 +769,83 @@ function tokenizeCommand(text) {
   return out;
 }
 
-function globToRegExp(pattern) {
-  var source = String(pattern || '');
-  var out = '^';
+var globLimit = 64;
+var globCache = {};
+var globCacheSize = 0;
+
+function compileGlob(pattern) {
+  var source = String(pattern || '').toLowerCase();
+  if (source.length > globLimit) return null;
+  if (globCache.hasOwnProperty(source)) return globCache[source];
+  var tokens = [];
   for (var i = 0; i < source.length; i++) {
     var ch = source.charAt(i);
-    if (ch === '*') out += '.*';
-    else if (ch === '?') out += '.';
+    if (ch === '*') {
+      if (tokens.length === 0 || tokens[tokens.length - 1].type !== 'star') tokens.push({ type: 'star' });
+    } else if (ch === '?') tokens.push({ type: 'any' });
     else if (ch === '[') {
-      var close = source.indexOf(']', i + 1);
+      var close = source.indexOf(']', i + 2);
       if (close < 0) {
-        out += '\\[';
+        tokens.push({ type: 'char', ch: '[' });
         continue;
       }
       var body = source.substring(i + 1, close);
-      if (body.charAt(0) === '!') body = '^' + body.substring(1);
-      out += '[' + body.replace(/\\/g, '\\\\') + ']';
+      var negate = body.charAt(0) === '!' || body.charAt(0) === '^';
+      if (negate) body = body.substring(1);
+      var ranges = [];
+      for (var k = 0; k < body.length; k++) {
+        if (k + 2 < body.length && body.charAt(k + 1) === '-') {
+          ranges.push([body.charAt(k), body.charAt(k + 2)]);
+          k += 2;
+        } else ranges.push([body.charAt(k), body.charAt(k)]);
+      }
+      tokens.push({ type: 'set', negate: negate, ranges: ranges });
       i = close;
-    } else if ('\\^$.|+(){}'.indexOf(ch) >= 0) out += '\\' + ch;
-    else out += ch;
+    } else tokens.push({ type: 'char', ch: ch });
   }
-  return new RegExp(out + '$', 'i');
+  if (globCacheSize > 512) {
+    globCache = {};
+    globCacheSize = 0;
+  }
+  globCache[source] = tokens;
+  globCacheSize++;
+  return tokens;
+}
+
+function globTokenMatches(token, ch) {
+  if (token.type === 'any') return true;
+  if (token.type === 'char') return token.ch === ch;
+  var hit = false;
+  for (var i = 0; i < token.ranges.length && !hit; i++) {
+    var lo = token.ranges[i][0];
+    var hi = token.ranges[i][1];
+    if (lo <= hi ? (ch >= lo && ch <= hi) : (ch >= hi && ch <= lo)) hit = true;
+  }
+  return token.negate ? !hit : hit;
+}
+
+function globMatch(pattern, name) {
+  var tokens = compileGlob(pattern);
+  if (!tokens) return false;
+  var text = String(name || '').toLowerCase();
+  var t = 0;
+  var p = 0;
+  var starAt = -1;
+  var resume = 0;
+  while (t < text.length) {
+    if (p < tokens.length && tokens[p].type === 'star') {
+      starAt = p++;
+      resume = t;
+    } else if (p < tokens.length && globTokenMatches(tokens[p], text.charAt(t))) {
+      p++;
+      t++;
+    } else if (starAt >= 0) {
+      p = starAt + 1;
+      t = ++resume;
+    } else return false;
+  }
+  while (p < tokens.length && tokens[p].type === 'star') p++;
+  return p === tokens.length;
 }
 
 function matchesPatterns(name, patterns) {
@@ -781,7 +854,7 @@ function matchesPatterns(name, patterns) {
   for (var i = 0; i < patterns.length; i++) {
     var p = String(patterns[i] || '');
     if (!p || p === '*' || p.indexOf('mime:') === 0) return true;
-    if (globToRegExp(p).test(text)) return true;
+    if (globMatch(p, text)) return true;
   }
   return false;
 }
@@ -853,12 +926,15 @@ function isImageName(name) {
   return !!imageExtSet[extOf(String(name || ''))];
 }
 
+var imagePreviewLimit = 64 * 1024 * 1024;
+
 function previewKind(entry) {
   if (!entry) return 'none';
   if (entry.isDir) return 'folder';
   if (entry.isBroken) return 'none';
+  if (entry.kind !== 'f' && entry.kind !== 'l') return 'none';
   var ext = String(entry.ext || '').toLowerCase();
-  if (imageExtSet[ext]) return 'image';
+  if (imageExtSet[ext]) return (Number(entry.size) || 0) > imagePreviewLimit ? 'none' : 'image';
   if (audioExtSet[ext]) return 'audio';
   return 'text';
 }
@@ -988,4 +1064,34 @@ function sectionShift(heights, gap, from, to, index) {
   if (from < to && index > from && index <= to) return -(heights[from] + gap);
   if (from > to && index >= to && index < from) return heights[from] + gap;
   return 0;
+}
+
+function isWithin(path, root) {
+  var p = String(path || '');
+  var r = String(root || '');
+  while (r.length > 1 && r.charAt(r.length - 1) === '/') r = r.substring(0, r.length - 1);
+  if (!r || r === '/') return false;
+  return p === r || p.indexOf(r + '/') === 0;
+}
+
+var loneSurrogateProbe = /[\ud800-\udfff]/;
+
+function escapeLoneSurrogates(text) {
+  var s = String(text);
+  if (!loneSurrogateProbe.test(s)) return s;
+  var out = '';
+  for (var i = 0; i < s.length; i++) {
+    var code = s.charCodeAt(i);
+    if (code >= 0xD800 && code <= 0xDBFF && i + 1 < s.length) {
+      var next = s.charCodeAt(i + 1);
+      if (next >= 0xDC00 && next <= 0xDFFF) {
+        out += s.charAt(i) + s.charAt(i + 1);
+        i++;
+        continue;
+      }
+    }
+    if (code >= 0xD800 && code <= 0xDFFF) out += '\\u' + code.toString(16);
+    else out += s.charAt(i);
+  }
+  return out;
 }

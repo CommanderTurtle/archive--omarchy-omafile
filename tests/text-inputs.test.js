@@ -44,30 +44,38 @@ function inputBlocks(source) {
   return blocks;
 }
 
-test('every text input is read only while hidden, so Qt never reads the clipboard for one nobody can see', function () {
+test('every text input is permanently read only, so Qt never reads the clipboard for it', function () {
   var wrong = [];
   var seen = 0;
   qmlFiles().forEach(function (file) {
     inputBlocks(fs.readFileSync(path.join(root, file), 'utf8')).forEach(function (block) {
       seen++;
-      var ok = block.type === 'TextEdit' ? block.readOnly === 'true' : block.readOnly === '!visible';
-      if (!ok) wrong.push(file + ':' + block.line + ' ' + block.type + ' readOnly: ' + (block.readOnly || 'missing'));
+      if (block.readOnly !== 'true') wrong.push(file + ':' + block.line + ' ' + block.type + ' readOnly: ' + (block.readOnly || 'missing'));
     });
   });
   assert.ok(seen > 0, 'found text inputs to check');
   assert.deepEqual(wrong, []);
 });
 
-test('shell inputs that keep a hidden text field are only created on demand', function () {
-  var eager = [];
+test('editable fields go through the safe field components', function () {
+  var raw = [];
   qmlFiles().forEach(function (file) {
-    fs.readFileSync(path.join(root, file), 'utf8').split('\n').forEach(function (line, index) {
-      if (/\b(SearchableDropdown|NumberField)\s*\{/.test(line) && !/^\s*sourceComponent:\s*/.test(line)) {
-        eager.push(file + ':' + (index + 1));
-      }
+    if (file === path.join('components', 'EditField.qml') || file === path.join('components', 'EditInput.qml')) return;
+    inputBlocks(fs.readFileSync(path.join(root, file), 'utf8')).forEach(function (block) {
+      if (block.type !== 'TextEdit') raw.push(file + ':' + block.line + ' ' + block.type);
     });
   });
-  assert.deepEqual(eager, []);
+  assert.deepEqual(raw, []);
+});
+
+test('shell inputs with their own editable text field are never used', function () {
+  var used = [];
+  qmlFiles().forEach(function (file) {
+    fs.readFileSync(path.join(root, file), 'utf8').split('\n').forEach(function (line, index) {
+      if (/\b(SearchableDropdown|NumberField)\b/.test(line)) used.push(file + ':' + (index + 1));
+    });
+  });
+  assert.deepEqual(used, []);
 });
 
 test('the checker spots a missing or always editable binding', function () {

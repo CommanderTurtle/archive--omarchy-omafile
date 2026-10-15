@@ -33,8 +33,15 @@ DropArea {
     return false
   }
 
+  function ownUrls(ev) {
+    var source = ev.source
+    if (!source || !source.view || typeof source.view.dragUriList !== "string") return null
+    return source.view.dragUriList.split(/\r?\n/).filter(function (line) { return line && line.charAt(0) !== "#" })
+  }
+
   onEntered: function (drag) {
-    if (!drag.hasUrls || blocked(urlsOf(drag))) {
+    var own = ownUrls(drag)
+    if (area.target === "" || !drag.hasUrls || (own !== null && blocked(own))) {
       drag.accepted = false
       return
     }

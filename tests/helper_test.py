@@ -962,7 +962,7 @@ class CopyTests(HelperTestCase):
                 break
         self.assertIsNotNone(conflict_msg)
         self.assertEqual(conflict_msg["source"], src)
-        self.helper.send({"id": req_id, "op": "resolve", "action": "overwrite", "applyAll": False})
+        self.helper.send({"id": req_id, "op": "resolve", "action": "overwrite", "applyAll": False, "seq": conflict_msg["seq"]})
         rest = self.helper.collect_until(req_id)
         done = rest[-1]
         self.assertEqual(done["t"], "done")
@@ -982,7 +982,7 @@ class CopyTests(HelperTestCase):
                 conflict_msg = obj
                 break
         self.assertIsNotNone(conflict_msg)
-        self.helper.send({"id": req_id, "op": "resolve", "action": "cancel", "applyAll": False})
+        self.helper.send({"id": req_id, "op": "resolve", "action": "cancel", "applyAll": False, "seq": conflict_msg["seq"]})
         rest = self.helper.collect_until(req_id)
         err = rest[-1]
         self.assertEqual(err["t"], "error")
@@ -1097,13 +1097,14 @@ class ExtractTests(HelperTestCase):
 
 FAKE_BSDTAR = """#!/usr/bin/env python3
 import os, sys, time
-archive, work = sys.argv[2], sys.argv[4]
-with open(archive, "rb", buffering=0) as f:
-    f.read(os.path.getsize(archive) // 2)
-    sys.stderr.write("x first.txt\\n")
-    sys.stderr.flush()
-    time.sleep(30 if "slow" in archive else 0.8)
-    f.read()
+assert sys.argv[2] == "-"
+archive, work = os.readlink("/proc/self/fd/0"), sys.argv[4]
+os.read(0, os.fstat(0).st_size // 2)
+sys.stderr.write("x first.txt\\n")
+sys.stderr.flush()
+time.sleep(30 if "slow" in archive else 0.8)
+while os.read(0, 65536):
+    pass
 open(os.path.join(work, "first.txt"), "w").close()
 sys.stderr.write("x second.txt\\n")
 """
@@ -1318,7 +1319,7 @@ class TrashTests(HelperTestCase):
         self.assertTrue(all(r["ok"] for r in done["results"]))
         self.assertFalse(os.path.exists(trashed))
         self.assertFalse(os.path.exists(info_file))
-        info_msgs = self.helper.call({"id": self.next_id(), "op": "trashinfo"})
+        info_msgs = self.helper.call({"id": self.next_id(), "op": "trashinfo", "items": True})
         names = [item["name"] for item in [m for m in info_msgs if m["t"] == "trash"][0]["items"]]
         self.assertNotIn("gone.txt", names)
 
@@ -1348,7 +1349,7 @@ class TrashTests(HelperTestCase):
             with open(p, "w") as f:
                 f.write("data")
         self.helper.call({"id": self.next_id(), "op": "trash", "paths": [f1, f2]})
-        msgs = self.helper.call({"id": self.next_id(), "op": "trashinfo"})
+        msgs = self.helper.call({"id": self.next_id(), "op": "trashinfo", "items": True})
         info_msg = [m for m in msgs if m["t"] == "trash"][0]
         self.assertGreaterEqual(info_msg["count"], 2)
         names = set(item["name"] for item in info_msg["items"])
@@ -1356,7 +1357,7 @@ class TrashTests(HelperTestCase):
         self.assertIn("t2.txt", names)
         empty_msgs = self.helper.call({"id": self.next_id(), "op": "emptytrash"})
         self.assertEqual(self.terminal(empty_msgs)["t"], "done")
-        after_msgs = self.helper.call({"id": self.next_id(), "op": "trashinfo"})
+        after_msgs = self.helper.call({"id": self.next_id(), "op": "trashinfo", "items": True})
         after_info = [m for m in after_msgs if m["t"] == "trash"][0]
         after_names = set(item["name"] for item in after_info["items"])
         self.assertNotIn("t1.txt", after_names)
@@ -1410,7 +1411,7 @@ class TrashTests(HelperTestCase):
     def check_symlinked_volume_trash_is_ignored(self, link_whole_trash):
         volume, outside, private = self.symlinked_volume_trash(link_whole_trash)
         try:
-            msgs = self.helper.call({"id": self.next_id(), "op": "trashinfo"})
+            msgs = self.helper.call({"id": self.next_id(), "op": "trashinfo", "items": True})
             info = [m for m in msgs if m["t"] == "trash"][0]
             self.assertNotIn("private.txt", [item["name"] for item in info["items"]])
             self.assertEqual(self.terminal(self.helper.call({"id": self.next_id(), "op": "emptytrash"}))["t"], "done")

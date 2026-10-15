@@ -36,13 +36,16 @@ test('a pick request never summons or hides the main window', () => {
   assert.deepEqual(shellCalls, []);
 });
 
-test('an answer for a replaced request leaves the new request pending', () => {
+test('a second app cannot cancel or replace a file chooser that is already open', () => {
   const { c, written } = service();
-  c.beginPick(JSON.stringify({ mode: 'open', result: '/run/old.json' }));
-  const old = c.pickRequest;
-  c.beginPick(JSON.stringify({ mode: 'open', result: '/run/new.json' }));
-  assert.deepEqual(written, [{ file: '/run/old.json', result: { ok: false } }]);
-  c.finishPick({ ok: false }, old);
-  assert.equal(c.pickRequest.result, '/run/new.json');
-  assert.equal(written.length, 1);
+  assert.equal(c.beginPick(JSON.stringify({ mode: 'open', result: '/run/first.json' })), 'ok');
+  const first = c.pickRequest;
+  assert.match(c.beginPick(JSON.stringify({ mode: 'open', result: '/run/second.json' })), /^error/);
+  assert.equal(c.pickRequest, first, 'the open chooser keeps its request');
+  assert.deepEqual(written, [], 'nothing is answered on its behalf');
+  c.cancelPick('/run/second.json');
+  assert.equal(c.pickRequest, first, 'a cancel for the refused request does nothing');
+  c.finishPick({ ok: true, paths: ['/tmp/a'] }, first);
+  assert.deepEqual(written, [{ file: '/run/first.json', result: { ok: true, paths: ['/tmp/a'] } }]);
+  assert.equal(c.beginPick(JSON.stringify({ mode: 'open', result: '/run/second.json' })), 'ok', 'the next request is accepted once it closes');
 });

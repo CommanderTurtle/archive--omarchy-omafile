@@ -79,7 +79,7 @@ class TrashSecurityTests(unittest.TestCase):
         with patch.object(self.helper, "list_trash_roots", return_value=self.roots()), \
                 patch.object(self.helper, "emit", side_effect=sent.append), \
                 patch.object(self.helper, "send_done"):
-            worker = threading.Thread(target=self.helper.op_trashinfo, args=({"id": 1},), daemon=True)
+            worker = threading.Thread(target=self.helper.op_trashinfo, args=({"id": 1, "items": True},), daemon=True)
             worker.start()
             worker.join(5)
             self.assertFalse(worker.is_alive(), "the trash listing blocked")

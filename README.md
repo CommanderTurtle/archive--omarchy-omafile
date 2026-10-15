@@ -173,6 +173,8 @@ gio mime inode/directory
 
 Turn on Pick files for other apps in Settings, under Opening. When a browser or another app asks you to choose a file, for example Upload file in Chrome or Firefox, Omafile opens instead of the GTK file chooser. The same goes for Save as and download locations. The chooser opens in its own floating window over the app and closes once you pick, so Omafile windows you already have open are left alone. An open popup panel closes so it does not cover the chooser. A bar along the bottom of the window shows what the app asked for, with a name box when saving and the app's file type filters. Pick a file and press Enter or the Select button, or press `Escape` to cancel. To make a folder first, choose New folder from the menu at the top right or press Ctrl+Shift+N; the chooser opens it, ready to pick or save into.
 
+The chooser is only for choosing. The title names the app that asked, when the portal says which one. Trash, delete, paste, drop, rename, Properties, undo, the terminal and the other actions that change files are switched off while it is open, and no thumbnails are made for the folder the app opened it in. One app at a time can use it: a second request is turned down instead of replacing the one you are answering. Links are not handed out, so pick the file a link points to instead. When an app saves several files into a folder that already has some of those names, the new files get numbered names, so nothing there is overwritten.
+
 It works through the desktop portal, the same route every app uses to ask for a file. Omafile registers a small D-Bus service in your home directory and tells the portal to send file chooser requests to it. Other portals, such as screen sharing, are left alone.
 
 The portal only reads its list of backends from `/usr/share/xdg-desktop-portal/portals`, so enabling asks for your password once to install one file there, `omafile.portal`. Nothing else outside your home directory changes.
@@ -195,11 +197,13 @@ The same from a terminal:
 
 Copy, cut and paste use the system clipboard, so files copied in GNOME Files, a browser or a chat app paste into Omafile, and files copied in Omafile paste into them. A cut offers GNOME's format, so pasting it in GNOME Files moves the files. Paste an image from the clipboard to save it as a new file. Cut files show dimmed icons and a scissors marker until the clipboard changes or the files are pasted.
 
+Text fields, such as the path bar, rename and search, paste through Omafile's helper rather than Qt, which caps clipboard text at 64 KB. Without that, Qt would read whatever another app copied into the desktop shell with no limit. Typing, Backspace, Delete, Ctrl+X, Ctrl+Z and Ctrl+Shift+Z work as usual. Input methods and compose sequences for typing accented or non-Latin text are not available in these fields.
+
 Drag files onto a folder, a sidebar place or the pane background to transfer them there, or out of the window into another app. By default this moves within a drive and copies to another drive, as in GNOME Files. Under Settings > Browsing > Drag and drop, choose Automatic, Always ask, Always copy or Always move. Always ask shows a popup at the drop position with Copy, Move and Cancel, and Escape or a click outside cancels. Dropping on Trash moves them to the trash. Drag from the space beside a name to draw a selection box instead of dragging the item. Files can also be dropped on the path bar or a breadcrumb folder, using the same move or copy rules as pane and sidebar drops.
 
 ### Copying over something that exists
 
-Omafile asks what to do. Choose with the mouse, or with the keys under [Keyboard](#when-a-file-already-exists).
+Omafile asks what to do. Choose with the mouse, or with the keys under [Keyboard](#when-a-file-already-exists). The question appears in the window that started the copy, waits until any dialog you have open is closed, and ignores keys for the first moment so a keystroke meant for something else cannot answer it. Undo after a copy or move acts on exactly what was made, so undoing a Keep both copy removes the new copy and leaves the original alone.
 
 ## Keyboard
 

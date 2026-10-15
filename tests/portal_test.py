@@ -25,6 +25,10 @@ portal = load("omafile_portal", PORTAL_PATH)
 setup = load("omafile_portal_setup", SETUP_PATH)
 
 
+def GLibPath(uri):
+    return portal.GLib.filename_from_uri(uri)[0]
+
+
 class RequestTests(unittest.TestCase):
     def test_open_defaults(self):
         req = portal.build_request("open", "", {}, "/run/x.json")
@@ -37,7 +41,7 @@ class RequestTests(unittest.TestCase):
         self.assertEqual(req["result"], "/run/x.json")
         self.assertEqual(set(req), {
             "mode", "title", "acceptLabel", "multiple", "directory", "currentFolder",
-            "currentName", "currentFile", "files", "filters", "currentFilter", "result"})
+            "currentName", "currentFile", "files", "filters", "currentFilter", "appId", "result"})
         json.dumps(req)
 
     def test_open_options(self):
@@ -202,6 +206,37 @@ class ResultTests(unittest.TestCase):
             self.assertTrue(portal.valid_request("savefiles", {"files": [b"a.txt\0", b"..hidden\0"]}))
             self.assertTrue(portal.valid_request("open", {}))
 
+    def test_savefiles_never_hands_out_an_existing_file(self):
+        options = {"files": [b"a.txt\0", b"b.txt\0", b"a (1).txt\0"]}
+        with tempfile.TemporaryDirectory() as tmp:
+            open(os.path.join(tmp, "a.txt"), "w").close()
+            os.symlink("/etc/passwd", os.path.join(tmp, "b.txt"))
+            response, results = portal.parse_result({"ok": True, "paths": [tmp]}, "savefiles", options)
+            self.assertEqual(response, 0)
+            names = [os.path.basename(GLibPath(u)) for u in results["uris"]]
+            self.assertEqual(names, ["a (2).txt", "b (1).txt", "a (1).txt"])
+
+    def test_a_picked_symlink_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            link = os.path.join(tmp, "notes.txt")
+            os.symlink("/etc/passwd", link)
+            self.assertEqual(portal.parse_result({"ok": True, "paths": [link]}, "open", {})[0], 2)
+            self.assertEqual(portal.parse_result({"ok": True, "paths": [link]}, "save", {})[0], 2)
+            folder = os.path.join(tmp, "dir")
+            os.symlink(tmp, folder)
+            self.assertEqual(portal.parse_result({"ok": True, "paths": [folder]}, "savefiles", {"files": [b"x\0", b"y\0"]})[0], 2)
+
+    def test_filters_and_app_id_are_bounded(self):
+        filters = [("f%d" % i, [(0, "*" * 200), (0, "*.txt")] + [(0, "*.%d" % j) for j in range(100)]) for i in range(50)]
+        req = portal.build_request("open", "", {"filters": filters}, "/run/x.json", "org.example.App")
+        self.assertEqual(len(req["filters"]), portal.MAX_FILTERS)
+        self.assertEqual(len(req["filters"][0]["patterns"]), portal.MAX_PATTERNS)
+        self.assertNotIn("*" * 200, req["filters"][0]["patterns"])
+        self.assertEqual(req["appId"], "org.example.App")
+        self.assertEqual(portal.build_request("open", "", {}, "/r", "bad id\n")["appId"], "")
+        many = {"files": [("f%d" % i).encode() + b"\0" for i in range(portal.MAX_SAVE_FILES + 1)]}
+        self.assertFalse(portal.valid_request("savefiles", many))
+
     def test_returned_paths_must_be_normalised(self):
         for path in ["/home/me/../etc/passwd", "/home/me/./x", "/home/me/x/", "/home//me"]:
             self.assertEqual(portal.parse_result({"ok": True, "paths": [path]}, "open", {})[0], 2, path)
@@ -281,7 +316,7 @@ class SetupCommandTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             with open(service, encoding="utf-8") as f:
                 body = f.read()
-            self.assertIn("Exec=" + os.path.realpath(PORTAL_PATH) + "\n", body)
+            self.assertIn("Exec=\"" + os.path.realpath(PORTAL_PATH) + "\"\n", body)
             with open(conf, encoding="utf-8") as f:
                 self.assertIn("FileChooser=omafile", f.read())
             status = json.loads(self.run_setup(home, "status").stdout)
@@ -324,9 +359,9 @@ class SystemFileTests(unittest.TestCase):
         os.chmod(pkexec, 0o755)
         target = os.path.join(root, "share", "portals", "omafile.portal")
         env = dict(os.environ)
-        env["PATH"] = fake + os.pathsep + env.get("PATH", "")
         env.pop("OMAFILE_PORTAL_SKIP_SYSTEM", None)
         with mock.patch.object(setup, "SYSTEM_PORTAL", target), \
+                mock.patch.object(setup, "ELEVATORS", ((pkexec, False),)), \
                 mock.patch.dict(os.environ, env, clear=True):
             setup.install_system_file()
         with open(log, encoding="utf-8") as f:
@@ -335,7 +370,7 @@ class SystemFileTests(unittest.TestCase):
     def test_body_reaches_root_over_stdin(self):
         with tempfile.TemporaryDirectory() as root:
             target, argv = self.install(root, "exec \"$@\"\n")
-            self.assertEqual(argv, ["install", "-Dm644", "/dev/stdin", target])
+            self.assertEqual(argv, ["/usr/bin/install", "-Dm644", "/dev/stdin", target])
             with open(target, encoding="utf-8") as f:
                 self.assertEqual(f.read(), setup.PORTAL_BODY)
             self.assertEqual(os.stat(target).st_mode & 0o777, 0o644)
@@ -344,6 +379,29 @@ class SystemFileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             with self.assertRaises(RuntimeError):
                 self.install(root, "exit 1\n")
+
+
+    def test_a_pkexec_on_the_user_path_is_not_used(self):
+        with tempfile.TemporaryDirectory() as root:
+            fake = os.path.join(root, "bin")
+            os.makedirs(fake)
+            planted = os.path.join(fake, "pkexec")
+            with open(planted, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\ntouch " + os.path.join(root, "ran") + "\n")
+            os.chmod(planted, 0o755)
+            target = os.path.join(root, "omafile.portal")
+            env = {"PATH": fake, "HOME": root}
+            with mock.patch.object(setup, "SYSTEM_PORTAL", target), \
+                    mock.patch.object(setup, "ELEVATORS", (("/nonexistent/pkexec", False),)), \
+                    mock.patch.dict(os.environ, env, clear=True):
+                with self.assertRaises(RuntimeError):
+                    setup.install_system_file()
+            self.assertFalse(os.path.exists(os.path.join(root, "ran")))
+
+    def test_an_unsafe_plugin_path_is_refused(self):
+        with mock.patch.object(setup, "PORTAL_BIN", '/home/me/x"; evil/omafile-portal'):
+            with self.assertRaises(RuntimeError):
+                setup.service_body()
 
 
 if __name__ == "__main__":

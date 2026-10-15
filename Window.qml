@@ -48,9 +48,18 @@ Item {
       + "return hl.dsp.cursor.move(hl.get_cursor_pos()) end)()"
   }
 
+  function ownWindowLua() {
+    return "local function own(t) for _, w in ipairs(hl.get_windows()) do "
+      + "if w.pid == " + Number(Quickshell.processId) + " and w.title == t then return w end end return nil end "
+  }
+
+  function focusOwnLua(title) {
+    return "local target = own(\"" + title + "\") "
+      + "if target then hl.dispatch(hl.dsp.focus({ window = \"address:\" .. target.address })) end "
+  }
+
   function pickerFocusCommand() {
-    return "(function() local p = hl.get_cursor_pos() "
-      + "hl.dispatch(hl.dsp.focus({ window = \"title:^" + host.pickerTitle + "$\" })) "
+    return "(function() local p = hl.get_cursor_pos() " + ownWindowLua() + focusOwnLua(host.pickerTitle)
       + "return hl.dsp.cursor.move(p) end)()"
   }
 
@@ -118,14 +127,11 @@ Item {
   }
 
   function raiseCommand() {
-    var target = "title:^" + raiseTitle + "$"
     var move = raiseAnchor === "" ? "" :
-      "local anchor = nil "
-      + "for _, w in ipairs(hl.get_windows()) do if w.title == \"" + raiseAnchor + "\" then anchor = w end end "
-      + "if anchor then hl.dispatch(hl.dsp.window.move({ x = anchor.at.x + " + raiseStep
-      + ", y = anchor.at.y + " + raiseStep + ", window = \"" + target + "\" })) end "
-    return "(function() local p = hl.get_cursor_pos() " + move
-      + "hl.dispatch(hl.dsp.focus({ window = \"" + target + "\" })) "
+      "local anchor = own(\"" + raiseAnchor + "\") local moving = own(\"" + raiseTitle + "\") "
+      + "if anchor and moving then hl.dispatch(hl.dsp.window.move({ x = anchor.at.x + " + raiseStep
+      + ", y = anchor.at.y + " + raiseStep + ", window = \"address:\" .. moving.address })) end "
+    return "(function() local p = hl.get_cursor_pos() " + ownWindowLua() + move + focusOwnLua(raiseTitle)
       + "return hl.dsp.cursor.move(p) end)()"
   }
 

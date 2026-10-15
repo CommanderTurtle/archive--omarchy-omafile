@@ -64,6 +64,8 @@ INFLIGHT = {}
 def register_inflight(req_id, kind):
     ev = threading.Event()
     with INFLIGHT_LOCK:
+        if req_id in INFLIGHT:
+            return None
         INFLIGHT[req_id] = {"cancel": ev, "kind": kind}
     return ev
 
@@ -73,6 +75,7 @@ def unregister_inflight(req_id):
 
 CONFLICT_LOCK = threading.Lock()
 PENDING_CONFLICTS = {}
+CONFLICT_SEQ = [0]
 
 WATCH_LOCK = threading.Lock()
 WATCHES = {}
@@ -94,6 +97,8 @@ def classify(full_path_bytes, lst):
             return "b", 0, link_target_str
         if stat.S_ISDIR(st.st_mode):
             return "L", 0, link_target_str
+        if not stat.S_ISREG(st.st_mode):
+            return "o", 0, link_target_str
         return "l", st.st_size, link_target_str
     if stat.S_ISDIR(mode):
         return "d", 0, None
@@ -121,6 +126,7 @@ def list_sort_key(entry):
 
 
 PEEK_LIMIT = 262144
+LIST_LIMIT = 200000
 
 def op_list(req, cancel_event):
     req_id = req["id"]
@@ -138,12 +144,16 @@ def op_list(req, cancel_event):
         chunk_size = 500
     path_bytes = to_bytes(path)
     collected = []
+    truncated = False
     try:
         with os.scandir(path_bytes) as it:
             for entry in it:
                 if cancel_event.is_set():
                     send_error(req_id, "ECANCELED", "cancelled")
                     return
+                if len(collected) >= LIST_LIMIT:
+                    truncated = True
+                    break
                 name_str = to_str(entry.name)
                 if not hidden and name_str.startswith("."):
                     continue
@@ -163,7 +173,14 @@ def op_list(req, cancel_event):
             send_error(req_id, "ECANCELED", "cancelled")
             return
         emit({"id": req_id, "t": "entries", "c": collected[i:i + chunk_size]})
-    send_done(req_id, total=total)
+    try:
+        real = to_str(os.path.realpath(path_bytes))
+    except (OSError, ValueError):
+        real = path
+    if truncated:
+        send_done(req_id, total=total, truncated=True, real=real)
+    else:
+        send_done(req_id, total=total, real=real)
 
 INOTIFY_LIB = None
 INOTIFY_AVAILABLE = False
@@ -383,6 +400,8 @@ def op_stat(req):
     emit({"id": req_id, "t": "stat", "items": items})
     send_done(req_id)
 
+DU_MAX_DEPTH = 256
+
 def op_du(req, cancel_event):
     req_id = req["id"]
     path = req.get("path")
@@ -414,12 +433,14 @@ def op_du(req, cancel_event):
         maybe_emit(final=True)
         send_done(req_id)
         return
-    stack = [path_bytes]
+    root_dev = root_lst.st_dev
+    seen = {(root_lst.st_dev, root_lst.st_ino)}
+    stack = [(path_bytes, 0)]
     while stack:
         if cancel_event.is_set():
             send_error(req_id, "ECANCELED", "cancelled")
             return
-        current = stack.pop()
+        current, depth = stack.pop()
         try:
             with os.scandir(current) as it:
                 for entry in it:
@@ -431,8 +452,13 @@ def op_du(req, cancel_event):
                     except OSError:
                         continue
                     if stat.S_ISDIR(lst.st_mode):
+                        key = (lst.st_dev, lst.st_ino)
+                        if lst.st_dev != root_dev or key in seen:
+                            continue
+                        seen.add(key)
                         dirs += 1
-                        stack.append(entry.path)
+                        if depth < DU_MAX_DEPTH:
+                            stack.append((entry.path, depth + 1))
                     else:
                         total_bytes += lst.st_size
                         files += 1
@@ -520,20 +546,158 @@ def remove_at(dir_fd, name, existing):
         os.unlink(name, dir_fd=dir_fd)
 
 
+PATH_OPEN_FLAGS = os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC
+MAX_LINK_HOPS = 40
+UNTRUSTED_LINK_ROOTS = (b"/mnt", b"/media", b"/run/media")
+
+
+MOUNT_ESCAPE_RE = re.compile(rb"\\([0-7]{3})")
+
+
+def unescape_mount(field):
+    return MOUNT_ESCAPE_RE.sub(lambda m: bytes([int(m.group(1), 8) & 0xFF]), field)
+
+
+def mount_entries():
+    entries = []
+    try:
+        with open("/proc/self/mountinfo", "rb") as f:
+            for line in f:
+                parts = line.rstrip(b"\n").split(b" ")
+                if b"-" not in parts or len(parts) < 5:
+                    continue
+                sep = parts.index(b"-")
+                fstype = to_str(parts[sep + 1]) if len(parts) > sep + 1 else ""
+                entries.append((unescape_mount(parts[4]), fstype))
+    except OSError:
+        pass
+    return entries
+
+
+def mount_for_path(real, entries):
+    best = (b"/", "")
+    for point, fstype in entries:
+        if real == point or point == b"/" or real.startswith(point + b"/"):
+            if len(point) >= len(best[0]):
+                best = (point, fstype)
+    return best
+
+
+def real_dir(dir_fd):
+    return os.readlink(b"/proc/self/fd/%d" % dir_fd)
+
+
+def link_trusted(lst, dir_fd, mounts):
+    if lst.st_uid not in (0, os.getuid()):
+        return False
+    try:
+        real = real_dir(dir_fd)
+    except OSError:
+        return False
+    point, fstype = mount_for_path(real, mounts)
+    if fstype in NETWORK_FILESYSTEMS or fstype.startswith("fuse"):
+        return False
+    for root in UNTRUSTED_LINK_ROOTS:
+        if point == root or point.startswith(root + b"/"):
+            return False
+    gvfs = to_bytes(GVFS_ROOT)
+    if real == gvfs or real.startswith(gvfs + b"/"):
+        return False
+    return True
+
+
+def open_dir_safely(path_bytes, create=False):
+    if not path_bytes.startswith(b"/"):
+        raise OSError(errno.EINVAL, "path must be absolute", to_str(path_bytes))
+    fd = os.open(b"/", PATH_OPEN_FLAGS)
+    pending = [c for c in path_bytes.split(b"/") if c]
+    hops = 0
+    mounts = None
+    try:
+        while pending:
+            comp = pending.pop(0)
+            if comp == b".":
+                continue
+            try:
+                nxt = os.open(comp, PATH_OPEN_FLAGS | os.O_NOFOLLOW, dir_fd=fd)
+            except FileNotFoundError:
+                if not create or comp == b"..":
+                    raise
+                try:
+                    os.mkdir(comp, 0o777, dir_fd=fd)
+                except FileExistsError:
+                    pass
+                hops += 1
+                if hops > MAX_LINK_HOPS:
+                    raise OSError(errno.ELOOP, "this folder keeps changing", to_str(path_bytes))
+                pending.insert(0, comp)
+                continue
+            except OSError as e:
+                if e.errno not in (errno.ELOOP, errno.ENOTDIR):
+                    raise
+                lst = os.lstat(comp, dir_fd=fd)
+                if not stat.S_ISLNK(lst.st_mode):
+                    raise
+                if mounts is None:
+                    mounts = mount_entries()
+                if not link_trusted(lst, fd, mounts):
+                    raise OSError(errno.ELOOP, "a folder in this path is a link Omafile will not follow here", to_str(path_bytes))
+                hops += 1
+                if hops > MAX_LINK_HOPS:
+                    raise OSError(errno.ELOOP, "too many links", to_str(path_bytes))
+                target = os.readlink(comp, dir_fd=fd)
+                if target.startswith(b"/"):
+                    os.close(fd)
+                    fd = os.open(b"/", PATH_OPEN_FLAGS)
+                pending = [c for c in target.split(b"/") if c] + pending
+                continue
+            os.close(fd)
+            fd = nxt
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def valid_leaf(name):
+    return bool(name) and name not in (b".", b"..") and b"/" not in name and b"\0" not in name
+
+
+def open_parent_safely(path_bytes):
+    path_bytes = path_bytes.rstrip(b"/") or b"/"
+    name = os.path.basename(path_bytes)
+    if not valid_leaf(name):
+        raise OSError(errno.EINVAL, "not a valid file name", to_str(path_bytes))
+    return open_dir_safely(os.path.dirname(path_bytes) or b"/"), name
+
+
+RENAME_NOREPLACE = 1
+_RENAMEAT2 = None
+try:
+    _libc = ctypes.CDLL(None, use_errno=True)
+    _RENAMEAT2 = _libc.renameat2
+    _RENAMEAT2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    _RENAMEAT2.restype = ctypes.c_int
+except (OSError, AttributeError):
+    _RENAMEAT2 = None
+
+
+def rename_noreplace(src_name, src_fd, dst_name, dst_fd):
+    if _RENAMEAT2 is not None:
+        if _RENAMEAT2(src_fd, src_name, dst_fd, dst_name, RENAME_NOREPLACE) == 0:
+            return
+        err = ctypes.get_errno()
+        if err not in (errno.EINVAL, errno.ENOSYS, errno.ENOTSUP):
+            raise OSError(err, os.strerror(err), to_str(dst_name))
+    if lstat_at(dst_fd, dst_name) is not None:
+        raise OSError(errno.EEXIST, os.strerror(errno.EEXIST), to_str(dst_name))
+    os.rename(src_name, dst_name, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
+
+
 def open_parent(path_bytes):
-    return os.open(os.path.dirname(path_bytes) or b"/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    fd, _ = open_parent_safely(path_bytes)
+    return fd
 
-
-def unique_dest_name(dest_dir_bytes, name_bytes):
-    if not os.path.lexists(os.path.join(dest_dir_bytes, name_bytes)):
-        return name_bytes
-    stem, ext = os.path.splitext(to_str(name_bytes))
-    n = 1
-    while True:
-        candidate_bytes = to_bytes("%s (%d)%s" % (stem, n, ext))
-        if not os.path.lexists(os.path.join(dest_dir_bytes, candidate_bytes)):
-            return candidate_bytes
-        n += 1
 
 def resolve_conflict(req_id, cancel_event, source_str, dest_str, dest_bytes, conflict_mode, job_state):
     if job_state.get("applyAll"):
@@ -548,9 +712,13 @@ def resolve_conflict(req_id, cancel_event, source_str, dest_str, dest_bytes, con
         dkind, dsize, dmtime = "f", 0, 0
     ev = threading.Event()
     with CONFLICT_LOCK:
-        PENDING_CONFLICTS[req_id] = {"event": ev, "action": None, "applyAll": False}
+        if req_id in PENDING_CONFLICTS:
+            return "cancel"
+        CONFLICT_SEQ[0] += 1
+        seq = CONFLICT_SEQ[0]
+        PENDING_CONFLICTS[req_id] = {"event": ev, "action": None, "applyAll": False, "seq": seq}
     emit({"id": req_id, "t": "conflict", "source": source_str, "dest": dest_str,
-          "destKind": dkind, "destSize": dsize, "destMtime": dmtime})
+          "destKind": dkind, "destSize": dsize, "destMtime": dmtime, "seq": seq})
     while True:
         if cancel_event.is_set():
             with CONFLICT_LOCK:
@@ -569,9 +737,11 @@ def op_resolve(req):
     req_id = req["id"]
     action = req.get("action")
     apply_all = bool(req.get("applyAll", False))
+    if action not in ("overwrite", "skip", "rename", "cancel"):
+        action = "cancel"
     with CONFLICT_LOCK:
         info = PENDING_CONFLICTS.get(req_id)
-        if info:
+        if info and req.get("seq") == info["seq"] and info["action"] is None:
             info["action"] = action
             info["applyAll"] = apply_all
             info["event"].set()
@@ -645,11 +815,23 @@ def op_copy_move(req, cancel_event, is_move):
     def fail(path_bytes, e):
         errors.append({"path": to_str(path_bytes), "message": e.strerror or str(e)})
 
+    top = {"armed": False, "name": None, "merged": False}
+
     def place_target(src_lst, dst_fd, dst_name, src_path, dst_path, same_action, merge_dirs):
+        nonlocal skipped
+        armed = top["armed"]
+        top["armed"] = False
+        result = place_target_inner(src_lst, dst_fd, dst_name, src_path, dst_path, same_action, merge_dirs)
+        if armed:
+            top["name"] = result[0]
+            top["merged"] = result[2]
+        return result
+
+    def place_target_inner(src_lst, dst_fd, dst_name, src_path, dst_path, same_action, merge_dirs):
         nonlocal skipped
         existing = lstat_at(dst_fd, dst_name)
         if existing is None:
-            return dst_name
+            return dst_name, False, False
         if (existing.st_dev, existing.st_ino) == (src_lst.st_dev, src_lst.st_ino):
             action = same_action
         else:
@@ -658,17 +840,24 @@ def op_copy_move(req, cancel_event, is_move):
             raise Cancelled()
         if action == "skip":
             skipped += 1
-            return None
+            return None, False, False
         if action == "rename":
-            return unique_name_at(dst_fd, dst_name)
+            return unique_name_at(dst_fd, dst_name), False, False
         if action == "overwrite":
-            merge = merge_dirs and stat.S_ISDIR(existing.st_mode) and stat.S_ISDIR(src_lst.st_mode)
-            if not merge:
-                try:
-                    remove_at(dst_fd, dst_name, existing)
-                except OSError:
-                    pass
-        return dst_name
+            both_dirs = stat.S_ISDIR(existing.st_mode) and stat.S_ISDIR(src_lst.st_mode)
+            if merge_dirs and both_dirs:
+                return dst_name, False, True
+            if not stat.S_ISDIR(existing.st_mode) and not stat.S_ISDIR(src_lst.st_mode):
+                return dst_name, True, False
+            remove_at(dst_fd, dst_name, existing)
+            return dst_name, False, False
+        raise Cancelled()
+
+    def temp_name_at(dst_fd):
+        while True:
+            candidate = to_bytes(".omafile-part-%s" % os.urandom(6).hex())
+            if lstat_at(dst_fd, candidate) is None:
+                return candidate
 
     def copy_at(src_fd, src_name, dst_fd, dst_name, src_path, dst_path, same_action="rename"):
         nonlocal copied
@@ -679,7 +868,7 @@ def op_copy_move(req, cancel_event, is_move):
         except OSError as e:
             fail(src_path, e)
             return
-        target = place_target(lst, dst_fd, dst_name, src_path, dst_path, same_action, True)
+        target, replace, _ = place_target(lst, dst_fd, dst_name, src_path, dst_path, same_action, True)
         if target is None:
             return
         src_str = to_str(src_path)
@@ -687,10 +876,16 @@ def op_copy_move(req, cancel_event, is_move):
         if stat.S_ISLNK(lst.st_mode):
             try:
                 link = os.readlink(src_name, dir_fd=src_fd)
-                existing = lstat_at(dst_fd, target)
-                if existing is not None and not stat.S_ISDIR(existing.st_mode):
-                    os.unlink(target, dir_fd=dst_fd)
-                os.symlink(link, target, dir_fd=dst_fd)
+                tmp = temp_name_at(dst_fd)
+                os.symlink(link, tmp, dir_fd=dst_fd)
+                try:
+                    if replace:
+                        os.rename(tmp, target, src_dir_fd=dst_fd, dst_dir_fd=dst_fd)
+                    else:
+                        rename_noreplace(tmp, dst_fd, target, dst_fd)
+                except OSError:
+                    os.unlink(tmp, dir_fd=dst_fd)
+                    raise
             except OSError as e:
                 fail(src_path, e)
                 return
@@ -742,15 +937,24 @@ def op_copy_move(req, cancel_event, is_move):
                 fail(src_path, e)
                 return
             try:
-                file_dst = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                tmp = temp_name_at(dst_fd)
+                file_dst = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
                                    0o600, dir_fd=dst_fd)
             except OSError as e:
                 os.close(file_src)
                 fail(src_path, e)
                 return
+            placed = False
             try:
                 copy_file_data(file_src, file_dst, progress_cb, cancel_event)
                 copy_meta_fd(file_dst, lst)
+                os.close(file_dst)
+                file_dst = None
+                if replace:
+                    os.rename(tmp, target, src_dir_fd=dst_fd, dst_dir_fd=dst_fd)
+                else:
+                    rename_noreplace(tmp, dst_fd, target, dst_fd)
+                placed = True
             except Cancelled:
                 raise
             except OSError as e:
@@ -759,7 +963,13 @@ def op_copy_move(req, cancel_event, is_move):
                 return
             finally:
                 os.close(file_src)
-                os.close(file_dst)
+                if file_dst is not None:
+                    os.close(file_dst)
+                if not placed:
+                    try:
+                        os.unlink(tmp, dir_fd=dst_fd)
+                    except OSError:
+                        pass
             bytes_done[0] = base + lst.st_size
             files_done[0] += 1
             copied += 1
@@ -775,12 +985,15 @@ def op_copy_move(req, cancel_event, is_move):
         except OSError as e:
             fail(src_path, e)
             return
-        target = place_target(lst, dst_fd, dst_name, src_path, dst_path, "skip", False)
+        target, replace, _ = place_target(lst, dst_fd, dst_name, src_path, dst_path, "skip", False)
         if target is None:
             return
         emit_progress(to_str(src_path))
         try:
-            os.rename(src_name, target, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
+            if replace:
+                os.rename(src_name, target, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
+            else:
+                rename_noreplace(src_name, src_fd, target, dst_fd)
             size = 0 if stat.S_ISDIR(lst.st_mode) else lst.st_size
             bytes_done[0] += size
             files_done[0] += 1
@@ -790,8 +1003,9 @@ def op_copy_move(req, cancel_event, is_move):
                 fail(src_path, e)
                 return
             before = len(errors)
+            skipped_before = skipped
             copy_at(src_fd, src_name, dst_fd, target, src_path, os.path.join(os.path.dirname(dst_path), target), "skip")
-            if len(errors) != before:
+            if len(errors) != before or skipped != skipped_before:
                 return
             try:
                 remove_at(src_fd, src_name, lst)
@@ -799,15 +1013,20 @@ def op_copy_move(req, cancel_event, is_move):
                 fail(src_path, e2)
 
     try:
-        dest_fd = open_checked(None, dest_bytes, dest_lst, os.O_RDONLY | os.O_DIRECTORY)
+        dest_fd = open_dir_safely(dest_bytes)
+        dfst = os.fstat(dest_fd)
+        if (dfst.st_dev, dfst.st_ino) != (dest_lst.st_dev, dest_lst.st_ino):
+            os.close(dest_fd)
+            raise ChangedWhileCopying(errno.ESTALE, "changed while copying")
     except OSError as e:
         send_error(req_id, errno_code(e), e.strerror or str(e), dest)
         return
+    created = []
     try:
         for s in sources:
             if cancel_event.is_set():
                 raise Cancelled()
-            src_bytes = to_bytes(s)
+            src_bytes = to_bytes(s).rstrip(b"/") or b"/"
             name = os.path.basename(src_bytes)
             dst_bytes = os.path.join(dest_bytes, name)
             try:
@@ -815,20 +1034,27 @@ def op_copy_move(req, cancel_event, is_move):
             except OSError as e:
                 fail(src_bytes, e)
                 continue
+            before = (len(errors), skipped)
+            top["armed"] = True
+            top["name"] = None
+            top["merged"] = False
             try:
                 if is_move:
                     move_at(parent_fd, name, dest_fd, name, src_bytes, dst_bytes)
                 else:
                     copy_at(parent_fd, name, dest_fd, name, src_bytes, dst_bytes)
             finally:
+                top["armed"] = False
                 os.close(parent_fd)
+            if (len(errors), skipped) == before and top["name"] is not None and not top["merged"]:
+                created.append({"source": s, "path": to_str(os.path.join(dest_bytes, top["name"]))})
     except Cancelled:
         send_error(req_id, "ECANCELED", "cancelled")
         return
     finally:
         os.close(dest_fd)
     emit_progress("", force=True)
-    send_done(req_id, copied=copied, skipped=skipped, errors=errors)
+    send_done(req_id, copied=copied, skipped=skipped, errors=errors, created=created)
 
 def xdg_data_home_bytes():
     v = os.environ.get("XDG_DATA_HOME")
@@ -895,6 +1121,9 @@ def find_mount_point(path_bytes):
             return p
         p = parent
 
+def mount_point_for_fd(dir_fd):
+    return mount_for_path(real_dir(dir_fd), mount_entries())[0]
+
 def volume_trash_name():
     return (".Trash-%d" % os.getuid()).encode()
 
@@ -913,60 +1142,149 @@ def checked_volume_trash(top):
         return files_dir, info_dir
     return None
 
-def make_private_dir(path_bytes):
+def open_owned_at(dir_fd, name, create=False):
+    if create:
+        try:
+            os.mkdir(name, 0o700, dir_fd=dir_fd)
+        except FileExistsError:
+            pass
+    fd = os.open(name, PATH_OPEN_FLAGS | os.O_NOFOLLOW, dir_fd=dir_fd)
+    if os.fstat(fd).st_uid != os.getuid():
+        os.close(fd)
+        raise OSError(errno.EPERM, "the trash on this drive is not a folder you own", to_str(name))
+    return fd
+
+
+def open_volume_trash(top_fd, create):
+    vol = open_owned_at(top_fd, volume_trash_name(), create)
     try:
-        os.mkdir(path_bytes, 0o700)
-    except FileExistsError:
-        pass
-    if not owned_real_dir(path_bytes):
-        raise OSError(errno.EPERM, "the trash on this drive is not a folder you own", to_str(path_bytes))
+        files_fd = open_owned_at(vol, b"files", create)
+        try:
+            info_fd = open_owned_at(vol, b"info", create)
+        except BaseException:
+            os.close(files_fd)
+            raise
+    finally:
+        os.close(vol)
+    return files_fd, info_fd
 
-def volume_trash_dirs(path_bytes):
-    top = find_mount_point(os.path.dirname(path_bytes) or b"/")
-    vol = os.path.join(top, volume_trash_name())
-    make_private_dir(vol)
-    files_dir = os.path.join(vol, b"files")
-    info_dir = os.path.join(vol, b"info")
-    make_private_dir(files_dir)
-    make_private_dir(info_dir)
-    return files_dir, info_dir, top
 
-def trash_dirs_for(path_bytes):
-    hf, hi = home_trash_dirs()
-    home_dev = os.stat(os.path.dirname(hf)).st_dev
+def home_trash_fds(files_dir=None, info_dir=None):
+    if files_dir is None:
+        files_dir, info_dir = home_trash_dirs()
+    files_fd = open_dir_safely(files_dir)
     try:
-        src_dev = os.stat(os.path.dirname(path_bytes) or b"/").st_dev
-    except OSError:
-        src_dev = home_dev
-    if src_dev == home_dev:
-        return hf, hi, None
-    vf, vi, top = volume_trash_dirs(path_bytes)
-    return vf, vi, top
+        info_fd = open_dir_safely(info_dir)
+    except BaseException:
+        os.close(files_fd)
+        raise
+    return files_fd, info_fd
 
-def reserve_trash_name(info_dir, base_bytes):
+
+def trash_fds_for(parent_fd):
+    files_fd, info_fd = home_trash_fds()
+    if os.fstat(files_fd).st_dev == os.fstat(parent_fd).st_dev:
+        return files_fd, info_fd, None
+    os.close(files_fd)
+    os.close(info_fd)
+    top = mount_point_for_fd(parent_fd)
+    top_fd = open_dir_safely(top)
+    try:
+        files_fd, info_fd = open_volume_trash(top_fd, True)
+    finally:
+        os.close(top_fd)
+    return files_fd, info_fd, top
+
+
+def trash_root_fds(index, files_dir, info_dir):
+    if index == 0:
+        return home_trash_fds(files_dir, info_dir)
+    trash = os.path.dirname(files_dir)
+    top_fd = open_dir_safely(os.path.dirname(trash))
+    try:
+        return open_volume_trash(top_fd, False)
+    finally:
+        os.close(top_fd)
+
+
+def reserve_trash_name(info_fd, base_bytes, start=0):
     stem, ext = os.path.splitext(to_str(base_bytes))
-    n = 0
+    n = start
     while True:
         candidate = base_bytes if n == 0 else to_bytes("%s.%d%s" % (stem, n, ext))
-        info_path = os.path.join(info_dir, candidate + b".trashinfo")
         try:
-            fd = os.open(info_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            return candidate, fd
+            fd = os.open(candidate + b".trashinfo", os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=info_fd)
+            return candidate, fd, n
         except FileExistsError:
             n += 1
 
-def move_across(src_bytes, dst_bytes):
-    lst = os.lstat(src_bytes)
+
+def fd_path(dir_fd, name):
+    return b"/proc/self/fd/%d/%s" % (dir_fd, name)
+
+
+def move_across(src_fd, src_name, dst_fd, dst_name):
+    if lstat_at(dst_fd, dst_name) is not None:
+        raise OSError(errno.EEXIST, os.strerror(errno.EEXIST), to_str(dst_name))
+    lst = os.lstat(src_name, dir_fd=src_fd)
+    dst = fd_path(dst_fd, dst_name)
     if stat.S_ISLNK(lst.st_mode):
-        target = os.readlink(src_bytes)
-        os.symlink(target, dst_bytes)
-        os.unlink(src_bytes)
+        os.symlink(os.readlink(src_name, dir_fd=src_fd), dst_name, dir_fd=dst_fd)
+        os.unlink(src_name, dir_fd=src_fd)
     elif stat.S_ISDIR(lst.st_mode):
-        shutil.copytree(src_bytes, dst_bytes, symlinks=True, copy_function=shutil.copy2)
-        shutil.rmtree(src_bytes)
+        shutil.copytree(fd_path(src_fd, src_name), dst, symlinks=True, copy_function=shutil.copy2)
+        shutil.rmtree(src_name, dir_fd=src_fd)
+    elif stat.S_ISREG(lst.st_mode):
+        src = os.open(src_name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=src_fd)
+        try:
+            shutil.copy2(b"/proc/self/fd/%d" % src, dst)
+        finally:
+            os.close(src)
+        os.unlink(src_name, dir_fd=src_fd)
     else:
-        shutil.copy2(src_bytes, dst_bytes)
-        os.unlink(src_bytes)
+        raise OSError(errno.EXDEV, "this kind of item cannot be moved to another drive", to_str(src_name))
+
+
+def trash_one(src):
+    pfd, name = open_parent_safely(src)
+    try:
+        os.lstat(name, dir_fd=pfd)
+        files_fd, info_fd, top = trash_fds_for(pfd)
+        try:
+            real_parent = real_dir(pfd)
+            full = os.path.join(real_parent, name)
+            path_for_info = full if top is None else os.path.relpath(full, top)
+            n = 0
+            while True:
+                candidate, fd, n = reserve_trash_name(info_fd, name, n)
+                deletion_date = time.strftime("%Y-%m-%dT%H:%M:%S")
+                content = "[Trash Info]\nPath=%s\nDeletionDate=%s\n" % (percent_encode(path_for_info), deletion_date)
+                try:
+                    os.write(fd, content.encode("utf-8"))
+                finally:
+                    os.close(fd)
+                try:
+                    try:
+                        rename_noreplace(name, pfd, candidate, files_fd)
+                    except OSError as e:
+                        if e.errno != errno.EXDEV:
+                            raise
+                        move_across(pfd, name, files_fd, candidate)
+                    return candidate
+                except OSError as e:
+                    try:
+                        os.unlink(candidate + b".trashinfo", dir_fd=info_fd)
+                    except OSError:
+                        pass
+                    if e.errno != errno.EEXIST:
+                        raise
+                    n += 1
+        finally:
+            os.close(files_fd)
+            os.close(info_fd)
+    finally:
+        os.close(pfd)
+
 
 def op_trash(req):
     req_id = req["id"]
@@ -974,38 +1292,26 @@ def op_trash(req):
     results = []
     for p in paths:
         try:
-            src = to_bytes(p)
-            files_dir, info_dir, top = trash_dirs_for(src)
-            base = os.path.basename(src)
-            candidate, fd = reserve_trash_name(info_dir, base)
-            path_for_info = src if top is None else os.path.relpath(src, top)
-            deletion_date = time.strftime("%Y-%m-%dT%H:%M:%S")
-            content = "[Trash Info]\nPath=%s\nDeletionDate=%s\n" % (percent_encode(path_for_info), deletion_date)
-            os.write(fd, content.encode("utf-8"))
-            os.close(fd)
-            dest_path = os.path.join(files_dir, candidate)
-            try:
-                os.rename(src, dest_path)
-            except OSError as e:
-                if e.errno == errno.EXDEV:
-                    move_across(src, dest_path)
-                else:
-                    raise
+            candidate = trash_one(to_bytes(p))
             results.append({"path": p, "ok": True, "trashinfo": to_str(candidate)})
         except OSError as e:
             results.append({"path": p, "ok": False, "message": e.strerror or str(e)})
     send_done(req_id, results=results)
 
-def trash_info_for(path_bytes, files_dirs):
-    parent = os.path.dirname(path_bytes)
-    if os.path.basename(parent) != b"files":
-        return None
+
+def trash_info_dir_for(parent_fd, files_dirs):
     if files_dirs[0] is None:
-        files_dirs[0] = {os.path.realpath(f): i for f, i in list_trash_roots()}
-    info_dir = files_dirs[0].get(os.path.realpath(parent))
-    if info_dir is None:
-        return None
-    return os.path.join(info_dir, os.path.basename(path_bytes) + b".trashinfo")
+        table = {}
+        for f, i in list_trash_roots():
+            try:
+                st = os.stat(f)
+            except OSError:
+                continue
+            table[(st.st_dev, st.st_ino)] = i
+        files_dirs[0] = table
+    st = os.fstat(parent_fd)
+    return files_dirs[0].get((st.st_dev, st.st_ino))
+
 
 def op_delete(req):
     req_id = req["id"]
@@ -1014,16 +1320,23 @@ def op_delete(req):
     files_dirs = [None]
     for p in paths:
         try:
-            b = to_bytes(p)
-            lst = os.lstat(b)
-            if stat.S_ISDIR(lst.st_mode) and not stat.S_ISLNK(lst.st_mode):
-                shutil.rmtree(b)
-            else:
-                os.unlink(b)
-            info_path = trash_info_for(b, files_dirs)
-            if info_path is not None:
+            pfd, name = open_parent_safely(to_bytes(p))
+            try:
+                lst = os.lstat(name, dir_fd=pfd)
+                if stat.S_ISDIR(lst.st_mode):
+                    shutil.rmtree(name, dir_fd=pfd)
+                else:
+                    os.unlink(name, dir_fd=pfd)
+                info_dir = trash_info_dir_for(pfd, files_dirs)
+            finally:
+                os.close(pfd)
+            if info_dir is not None:
                 try:
-                    os.unlink(info_path)
+                    ifd = open_dir_safely(info_dir)
+                    try:
+                        os.unlink(name + b".trashinfo", dir_fd=ifd)
+                    finally:
+                        os.close(ifd)
                 except OSError:
                     pass
             results.append({"path": p, "ok": True})
@@ -1048,9 +1361,9 @@ def volume_mounts():
 
 TRASHINFO_LIMIT = 65536
 
-def read_trashinfo(info_path):
+def read_trashinfo(info_path, dir_fd=None):
     try:
-        fd = os.open(info_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        fd = os.open(info_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=dir_fd)
     except OSError:
         return None
     try:
@@ -1084,101 +1397,149 @@ def list_trash_roots():
             roots.append(checked)
     return roots
 
+def restore_target(path_val, files_fd, is_home):
+    orig = percent_decode(path_val)
+    if b"\0" in orig:
+        return None
+    top = None
+    if not orig.startswith(b"/"):
+        top = mount_point_for_fd(files_fd)
+        orig = os.path.join(top, orig)
+    elif not is_home:
+        top = mount_point_for_fd(files_fd)
+    if b".." in orig.split(b"/"):
+        return None
+    if top is not None and top != b"/" and not orig.startswith(top + b"/"):
+        return None
+    return orig.rstrip(b"/") or None
+
+
+def restore_one(name_in_trash, files_fd, info_fd, is_home):
+    info_name = name_in_trash + b".trashinfo"
+    raw = read_trashinfo(info_name, info_fd)
+    if raw is None:
+        return None, "invalid trashinfo"
+    path_val = None
+    for line in raw.splitlines():
+        if line.startswith("Path="):
+            path_val = line[len("Path="):]
+            break
+    if path_val is None:
+        return None, "invalid trashinfo"
+    orig = restore_target(path_val, files_fd, is_home)
+    if orig is None or not valid_leaf(os.path.basename(orig)):
+        return None, "invalid trashinfo"
+    parent = os.path.dirname(orig) or b"/"
+    pfd = open_dir_safely(parent, create=True)
+    try:
+        leaf = os.path.basename(orig)
+        try:
+            rename_noreplace(name_in_trash, files_fd, leaf, pfd)
+        except OSError as e:
+            if e.errno != errno.EXDEV:
+                raise
+            move_across(files_fd, name_in_trash, pfd, leaf)
+    finally:
+        os.close(pfd)
+    os.unlink(info_name, dir_fd=info_fd)
+    return orig, None
+
+
 def op_restore(req):
     req_id = req["id"]
     items = req.get("items") or []
     results = []
     roots = list_trash_roots()
     for item in items:
-        item_bytes = to_bytes(item)
-        if not item_bytes.endswith(b".trashinfo"):
-            item_bytes = item_bytes + b".trashinfo"
+        item_bytes = to_bytes(item) if isinstance(item, str) else b""
+        if item_bytes.endswith(b".trashinfo"):
+            item_bytes = item_bytes[:-len(b".trashinfo")]
+        if not valid_leaf(item_bytes):
+            results.append({"path": item, "ok": False, "message": "not found"})
+            continue
         found = False
-        for files_dir, info_dir in roots:
-            info_path = os.path.join(info_dir, item_bytes)
-            if not os.path.exists(info_path):
-                continue
-            found = True
+        for index, (files_dir, info_dir) in enumerate(roots):
             try:
-                raw = read_trashinfo(info_path)
-                if raw is None:
-                    results.append({"path": item, "ok": False, "message": "invalid trashinfo"})
-                    break
-                path_val = None
-                for line in raw.splitlines():
-                    if line.startswith("Path="):
-                        path_val = line[len("Path="):]
-                        break
-                if path_val is None:
-                    results.append({"path": item, "ok": False, "message": "invalid trashinfo"})
-                    break
-                orig_bytes = percent_decode(path_val)
-                if not orig_bytes.startswith(b"/"):
-                    top = find_mount_point(files_dir)
-                    orig_bytes = os.path.join(top, orig_bytes)
-                name_in_trash = item_bytes[:-len(".trashinfo")]
-                src_in_files = os.path.join(files_dir, name_in_trash)
-                parent = os.path.dirname(orig_bytes)
-                if parent:
-                    os.makedirs(parent, exist_ok=True)
-                os.rename(src_in_files, orig_bytes)
-                os.remove(info_path)
-                results.append({"path": to_str(orig_bytes), "ok": True})
-            except OSError as e:
-                results.append({"path": item, "ok": False, "message": e.strerror or str(e)})
-            break
+                files_fd, info_fd = trash_root_fds(index, files_dir, info_dir)
+            except OSError:
+                continue
+            try:
+                if lstat_at(info_fd, item_bytes + b".trashinfo") is None:
+                    continue
+                found = True
+                try:
+                    orig, problem = restore_one(item_bytes, files_fd, info_fd, index == 0)
+                    if problem:
+                        results.append({"path": item, "ok": False, "message": problem})
+                    else:
+                        results.append({"path": to_str(orig), "ok": True})
+                except OSError as e:
+                    results.append({"path": item, "ok": False, "message": e.strerror or str(e)})
+                break
+            finally:
+                os.close(files_fd)
+                os.close(info_fd)
         if not found:
             results.append({"path": item, "ok": False, "message": "not found"})
     send_done(req_id, results=results)
 
+
+TRASH_ITEMS_LIMIT = 5000
+
+
 def op_trashinfo(req):
     req_id = req["id"]
+    want_items = bool(req.get("items"))
     roots = list_trash_roots()
     items = []
     count = 0
     total_bytes = 0
-    for files_dir, info_dir in roots:
+    for index, (files_dir, info_dir) in enumerate(roots):
         try:
-            names = os.listdir(info_dir)
+            files_fd, info_fd = trash_root_fds(index, files_dir, info_dir)
         except OSError:
             continue
-        for n in names:
-            if not n.endswith(b".trashinfo"):
-                continue
-            info_path = os.path.join(info_dir, n)
-            raw = read_trashinfo(info_path)
-            if raw is None:
-                continue
-            path_val = None
-            deleted = None
-            for line in raw.splitlines():
-                if line.startswith("Path="):
-                    path_val = line[len("Path="):]
-                elif line.startswith("DeletionDate="):
-                    deleted = line[len("DeletionDate="):]
-            stem = n[:-len(".trashinfo")]
-            file_path = os.path.join(files_dir, stem)
+        try:
             try:
-                lst = os.lstat(file_path)
-                kind, size, _ = classify(file_path, lst)
+                names = os.listdir(fd_path(info_fd, b"."))
             except OSError:
-                kind, size = "f", 0
-            if path_val:
-                orig_bytes = percent_decode(path_val)
-                if not orig_bytes.startswith(b"/"):
-                    top = find_mount_point(files_dir)
-                    orig_bytes = os.path.join(top, orig_bytes)
-            else:
-                orig_bytes = stem
-            items.append({
-                "name": to_str(stem), "original": to_str(orig_bytes),
-                "deleted": deleted, "size": size, "kind": kind,
-            })
-            count += 1
-            total_bytes += size
+                continue
+            for n in names:
+                if not n.endswith(b".trashinfo"):
+                    continue
+                stem = n[:-len(".trashinfo")]
+                lst = lstat_at(files_fd, stem)
+                if lst is None:
+                    continue
+                size = lst.st_size if stat.S_ISREG(lst.st_mode) else 0
+                count += 1
+                total_bytes += size
+                if not want_items or len(items) >= TRASH_ITEMS_LIMIT:
+                    continue
+                raw = read_trashinfo(n, info_fd)
+                if raw is None:
+                    continue
+                path_val = None
+                deleted = None
+                for line in raw.splitlines():
+                    if line.startswith("Path="):
+                        path_val = line[len("Path="):]
+                    elif line.startswith("DeletionDate="):
+                        deleted = line[len("DeletionDate="):]
+                orig_bytes = (restore_target(path_val, files_fd, index == 0) if path_val else None) or stem
+                kind = "d" if stat.S_ISDIR(lst.st_mode) else ("l" if stat.S_ISLNK(lst.st_mode) else ("f" if stat.S_ISREG(lst.st_mode) else "o"))
+                items.append({
+                    "name": to_str(stem), "original": to_str(orig_bytes),
+                    "deleted": deleted, "size": size, "kind": kind,
+                })
+        finally:
+            os.close(files_fd)
+            os.close(info_fd)
     watch_dirs = [to_str(info_dir) for _, info_dir in roots]
-    emit({"id": req_id, "t": "trash", "count": count, "bytes": total_bytes,
-          "items": items, "infoDirs": watch_dirs})
+    msg = {"id": req_id, "t": "trash", "count": count, "bytes": total_bytes, "infoDirs": watch_dirs}
+    if want_items:
+        msg["items"] = items
+    emit(msg)
     send_done(req_id)
 
 DIR_OPEN_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
@@ -1242,7 +1603,11 @@ def op_mkdir(req):
         send_error(req_id, "EINVAL", "path required")
         return
     try:
-        os.makedirs(to_bytes(path), exist_ok=False)
+        pfd, name = open_parent_safely(to_bytes(path))
+        try:
+            os.mkdir(name, dir_fd=pfd)
+        finally:
+            os.close(pfd)
         send_done(req_id, path=path)
     except OSError as e:
         send_error(req_id, errno_code(e), e.strerror or str(e), path)
@@ -1254,8 +1619,12 @@ def op_mkfile(req):
         send_error(req_id, "EINVAL", "path required")
         return
     try:
-        fd = os.open(to_bytes(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
-        os.close(fd)
+        pfd, name = open_parent_safely(to_bytes(path))
+        try:
+            fd = os.open(name, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC, 0o666, dir_fd=pfd)
+            os.close(fd)
+        finally:
+            os.close(pfd)
         send_done(req_id, path=path)
     except OSError as e:
         send_error(req_id, errno_code(e), e.strerror or str(e), path)
@@ -1267,29 +1636,38 @@ def op_rename(req):
     if not isinstance(path, str):
         send_error(req_id, "EINVAL", "path required")
         return
-    if not isinstance(new_name, str) or not new_name or "/" in new_name or new_name in (".", ".."):
+    if not isinstance(new_name, str) or not valid_leaf(to_bytes(new_name)):
         send_error(req_id, "EINVAL", "invalid newName", path)
         return
     try:
-        src = to_bytes(path)
-        dst = os.path.join(os.path.dirname(src), to_bytes(new_name))
-        os.rename(src, dst)
-        send_done(req_id, path=to_str(dst))
+        src = to_bytes(path).rstrip(b"/")
+        pfd, name = open_parent_safely(src)
+        try:
+            new_bytes = to_bytes(new_name)
+            if new_bytes != name:
+                rename_noreplace(name, pfd, new_bytes, pfd)
+        finally:
+            os.close(pfd)
+        send_done(req_id, path=to_str(os.path.join(os.path.dirname(src), to_bytes(new_name))))
     except OSError as e:
         send_error(req_id, errno_code(e), e.strerror or str(e), path)
 
-def walk_targets(path_bytes, recursive):
-    yield path_bytes
-    if not recursive:
-        return
+def walk_targets(path_bytes, recursive, apply):
+    pfd, name = open_parent_safely(path_bytes.rstrip(b"/") or b"/")
     try:
-        if not stat.S_ISDIR(os.lstat(path_bytes).st_mode):
+        apply(pfd, name)
+        if not recursive:
             return
-    except OSError:
-        return
-    for dirpath, dirnames, filenames in os.walk(path_bytes, followlinks=False):
-        for name in dirnames + filenames:
-            yield os.path.join(dirpath, name)
+        try:
+            if not stat.S_ISDIR(os.lstat(name, dir_fd=pfd).st_mode):
+                return
+        except OSError:
+            return
+        for _, dirnames, filenames, dirfd in os.fwalk(name, dir_fd=pfd, follow_symlinks=False):
+            for child in dirnames + filenames:
+                apply(dirfd, child)
+    finally:
+        os.close(pfd)
 
 def op_identity(req):
     req_id = req["id"]
@@ -1323,22 +1701,25 @@ def op_chmod(req):
     mask = 0o7777
     add &= mask
     drop &= mask
-    changed = 0
+    changed = [0]
+
+    def apply(dir_fd, name):
+        fd = os.open(name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
+        try:
+            lst = os.fstat(fd)
+            if stat.S_ISLNK(lst.st_mode):
+                return
+            current = stat.S_IMODE(lst.st_mode)
+            updated = (current | add) & ~drop & mask
+            if updated != current:
+                os.chmod("/proc/self/fd/%d" % fd, updated)
+                changed[0] += 1
+        finally:
+            os.close(fd)
+
     try:
-        for target in walk_targets(to_bytes(path), bool(req.get("recursive"))):
-            fd = os.open(target, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
-            try:
-                lst = os.fstat(fd)
-                if stat.S_ISLNK(lst.st_mode):
-                    continue
-                current = stat.S_IMODE(lst.st_mode)
-                updated = (current | add) & ~drop & mask
-                if updated != current:
-                    os.chmod("/proc/self/fd/%d" % fd, updated)
-                    changed += 1
-            finally:
-                os.close(fd)
-        send_done(req_id, path=path, changed=changed)
+        walk_targets(to_bytes(path), bool(req.get("recursive")), apply)
+        send_done(req_id, path=path, changed=changed[0])
     except OSError as e:
         send_error(req_id, errno_code(e), e.strerror or str(e), path)
 
@@ -1373,11 +1754,14 @@ def op_chown(req):
     try:
         uid = lookup_owner(owner) if owner is not None else -1
         gid = lookup_group(group) if group is not None else -1
-        changed = 0
-        for target in walk_targets(to_bytes(path), bool(req.get("recursive"))):
-            os.lchown(target, uid, gid)
-            changed += 1
-        send_done(req_id, path=path, changed=changed)
+        changed = [0]
+
+        def apply(dir_fd, name):
+            os.chown(name, uid, gid, dir_fd=dir_fd, follow_symlinks=False)
+            changed[0] += 1
+
+        walk_targets(to_bytes(path), bool(req.get("recursive")), apply)
+        send_done(req_id, path=path, changed=changed[0])
     except OSError as e:
         send_error(req_id, errno_code(e), e.strerror or str(e), path)
 
@@ -1564,12 +1948,26 @@ def op_peek(req):
     except (TypeError, ValueError):
         limit = PEEK_LIMIT
     try:
-        b = to_bytes(path)
-        if os.path.isdir(b):
-            send_error(req_id, "EISDIR", "is a directory", path)
-            return
-        with open(b, "rb") as f:
-            data = f.read(limit + 1)
+        fd = os.open(to_bytes(path), os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            st = os.fstat(fd)
+            if stat.S_ISDIR(st.st_mode):
+                send_error(req_id, "EISDIR", "is a directory", path)
+                return
+            if not stat.S_ISREG(st.st_mode):
+                send_error(req_id, "EINVAL", "not a regular file", path)
+                return
+            chunks = []
+            got = 0
+            while got <= limit:
+                chunk = os.read(fd, limit + 1 - got)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                got += len(chunk)
+            data = b"".join(chunks)
+        finally:
+            os.close(fd)
     except OSError as e:
         send_error(req_id, errno_code(e), e.strerror or str(e), path)
         return
@@ -2266,7 +2664,7 @@ def kill_process_group(proc):
         pass
 
 
-def run_trusted(name, args, stdin_text=None, timeout=30, limit=MAX_CAPTURE_BYTES, extra_env=None):
+def run_trusted(name, args, stdin_text=None, timeout=30, limit=MAX_CAPTURE_BYTES, extra_env=None, raw=False):
     program = trusted_program(name)
     argv = [program] + list(args)
     env = trusted_env()
@@ -2330,6 +2728,8 @@ def run_trusted(name, args, stdin_text=None, timeout=30, limit=MAX_CAPTURE_BYTES
                     stream.close()
                 except OSError:
                     pass
+    if raw:
+        return subprocess.CompletedProcess(argv, proc.returncode, bytes(captured_out), bytes(captured_err))
     return subprocess.CompletedProcess(
         argv, proc.returncode,
         captured_out.decode("utf-8", "replace"),
@@ -2496,7 +2896,9 @@ def op_defaultfm(req):
 def op_setdefaultfm(req, cancel_event):
     req_id = req["id"]
     enabled = bool(req.get("enabled", False))
-    previous = str(req.get("previous") or "")
+    previous = req.get("previous")
+    if not isinstance(previous, str) or not DESKTOP_ID_RE.match(previous):
+        previous = ""
     desktop_path = os.path.join(DESKTOP_DIR, DESKTOP_ID)
     try:
         trusted_program("gio")
@@ -2725,16 +3127,29 @@ CLIP_TIMEOUT = 3.0
 CLIP_IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp")
 CLIP_IMAGE_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif", "image/bmp": "bmp"}
 
+CLIP_LIST_LIMIT = 1024 * 1024
+CLIP_PATH_LIMIT = 20000
+CLIP_TEXT_LIMIT = 64 * 1024
+CLIP_TEXT_TYPES = ("text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "TEXT", "STRING")
+
+
 def wl_paste(args, limit=16 * 1024 * 1024):
     try:
-        tool = trusted_program("wl-paste")
-        out = subprocess.run([tool] + args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                             stderr=subprocess.DEVNULL, env=trusted_env(), timeout=CLIP_TIMEOUT)
+        out = run_trusted("wl-paste", args, timeout=CLIP_TIMEOUT, limit=limit + 1, raw=True)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if out.returncode != 0:
         return b""
-    return out.stdout[:limit]
+    if len(out.stdout) > limit:
+        return None
+    return out.stdout
+
+
+def clip_types():
+    listed = wl_paste(["--list-types"], limit=64 * 1024)
+    if listed is None:
+        return None
+    return listed.decode("utf-8", "replace").split()
 
 def unique_child(dest, stem, ext):
     candidate = os.path.join(dest, "%s.%s" % (stem, ext))
@@ -2821,30 +3236,48 @@ def op_clipset(req):
 
 def op_clipget(req):
     req_id = req["id"]
-    try:
-        wl_paste = trusted_program("wl-paste")
-        listed = subprocess.run([wl_paste, "--list-types"], capture_output=True, env=trusted_env(), timeout=3)
-    except (OSError, FileNotFoundError, subprocess.TimeoutExpired) as e:
-        send_error(req_id, "EUNSUPPORTED", str(e))
+    types = clip_types()
+    if types is None:
+        send_error(req_id, "EUNSUPPORTED", "the clipboard did not answer")
         return
-    types = listed.stdout.decode("utf-8", "replace").split()
     mode = "copy"
     paths = []
-    try:
+    body = None
+    if "x-special/gnome-copied-files" in types:
+        body = wl_paste(["--no-newline", "--type", "x-special/gnome-copied-files"], limit=CLIP_LIST_LIMIT)
+    elif "text/uri-list" in types:
+        body = wl_paste(["--no-newline", "--type", "text/uri-list"], limit=CLIP_LIST_LIMIT)
+    if body is None and ("x-special/gnome-copied-files" in types or "text/uri-list" in types):
+        send_error(req_id, "E2BIG", "the copied file list is too large")
+        return
+    if body:
+        text = body.decode("utf-8", "replace")
         if "x-special/gnome-copied-files" in types:
-            got = subprocess.run([wl_paste, "--no-newline", "--type", "x-special/gnome-copied-files"],
-                                 capture_output=True, env=trusted_env(), timeout=3)
-            mode, paths = parse_gnome_copied_files(got.stdout.decode("utf-8", "replace"))
-        elif "text/uri-list" in types:
-            got = subprocess.run([wl_paste, "--no-newline", "--type", "text/uri-list"],
-                                 capture_output=True, env=trusted_env(), timeout=3)
-            body = got.stdout.decode("utf-8", "replace")
-            paths = [x for x in (uri_to_path(u) for u in body.splitlines()) if x]
-    except (OSError, subprocess.TimeoutExpired) as e:
-        send_error(req_id, "EFAIL", str(e))
+            mode, paths = parse_gnome_copied_files(text)
+        else:
+            paths = [x for x in (uri_to_path(u) for u in text.splitlines()) if x]
+    if len(paths) > CLIP_PATH_LIMIT:
+        send_error(req_id, "E2BIG", "the copied file list is too large")
         return
     send_done(req_id, mode=mode, paths=paths,
               image="" if paths else next((mime for mime in CLIP_IMAGE_TYPES if mime in types), ""))
+
+
+def op_cliptext(req):
+    req_id = req["id"]
+    types = clip_types()
+    if types is None:
+        send_error(req_id, "EUNSUPPORTED", "the clipboard did not answer")
+        return
+    mime = next((t for t in CLIP_TEXT_TYPES if t in types), None)
+    if mime is None:
+        send_done(req_id, text="")
+        return
+    data = wl_paste(["--no-newline", "--type", mime], limit=CLIP_TEXT_LIMIT)
+    if data is None:
+        send_error(req_id, "E2BIG", "the copied text is too long to paste here")
+        return
+    send_done(req_id, text=data.decode("utf-8", "replace"))
 
 
 def op_clipclear(req):
@@ -2934,6 +3367,50 @@ def op_unmountdev(req, cancel_event):
     emit({"id": req_id, "t": "done"})
 
 
+SPACE_LOCK = threading.Lock()
+SPACE_PENDING = {}
+SPACE_CACHE = {}
+SPACE_TIMEOUT = 1.5
+
+
+def guarded_space(targets):
+    waits = []
+    with SPACE_LOCK:
+        for target in dict.fromkeys(targets):
+            worker = SPACE_PENDING.get(target)
+            if worker is None:
+                worker = threading.Thread(target=space_worker, args=(target,), daemon=True)
+                SPACE_PENDING[target] = worker
+                try:
+                    worker.start()
+                except RuntimeError:
+                    SPACE_PENDING.pop(target, None)
+                    continue
+            waits.append(worker)
+    deadline = time.monotonic() + SPACE_TIMEOUT
+    for worker in waits:
+        worker.join(max(0, deadline - time.monotonic()))
+    result = {}
+    with SPACE_LOCK:
+        for target in targets:
+            if target not in SPACE_PENDING and SPACE_CACHE.get(target):
+                result[target] = SPACE_CACHE[target]
+        if len(SPACE_CACHE) > 4096:
+            SPACE_CACHE.clear()
+    return result
+
+
+def space_worker(target):
+    try:
+        st = os.statvfs(to_bytes(target))
+        value = (st.f_frsize * st.f_blocks, st.f_frsize * st.f_bavail)
+    except OSError:
+        value = None
+    with SPACE_LOCK:
+        SPACE_CACHE[target] = value
+        SPACE_PENDING.pop(target, None)
+
+
 def op_drives(req):
     req_id = req["id"]
     drives = []
@@ -2942,18 +3419,16 @@ def op_drives(req):
     space_by_mount = {}
     mounted_volumes = []
     if findmnt_data:
-        def walk(fs_list):
+        def walk(fs_list, depth):
+            if depth > 64:
+                return
             for fs in fs_list or []:
                 tgt = fs.get("target")
-                if tgt:
-                    try:
-                        st = os.statvfs(to_bytes(tgt))
-                        space_by_mount[tgt] = (st.f_frsize * st.f_blocks, st.f_frsize * st.f_bavail)
-                    except OSError:
-                        pass
+                if isinstance(tgt, str) and tgt:
                     mounted_volumes.append((tgt, fs.get("source"), fs.get("fstype")))
-                walk(fs.get("children"))
-        walk(findmnt_data.get("filesystems"))
+                walk(fs.get("children"), depth + 1)
+        walk(findmnt_data.get("filesystems"), 0)
+        space_by_mount = guarded_space([t for t, _, _ in mounted_volumes])
     if lsblk_data:
         for dev in flatten_lsblk(lsblk_data.get("blockdevices")):
             mount = dev.get("mountpoint")
@@ -3242,8 +3717,28 @@ def archive_stem(name):
     return os.path.splitext(name)[0] or name
 
 
-def extract_argv(path, work):
-    return [trusted_program("bsdtar"), "-xvf", path, "-C", work]
+def extract_argv(work_fd):
+    return [trusted_program("bsdtar"), "-xvf", "-", "-C", "/proc/self/fd/%d" % work_fd]
+
+
+def make_work_dir(dir_fd, prefix):
+    while True:
+        name = prefix + os.urandom(6).hex().encode()
+        try:
+            os.mkdir(name, 0o700, dir_fd=dir_fd)
+            return name
+        except FileExistsError:
+            continue
+
+
+def place_unique(src_name, src_fd, want, dst_fd, pick=None):
+    while True:
+        candidate = (pick or unique_name_at)(dst_fd, want)
+        try:
+            rename_noreplace(src_name, src_fd, candidate, dst_fd)
+            return candidate
+        except FileExistsError:
+            continue
 
 
 def archive_read_position(pid, archive):
@@ -3252,6 +3747,7 @@ def archive_read_position(pid, archive):
         names = os.listdir(fd_dir)
     except OSError:
         return None
+    best = None
     for name in names:
         try:
             if os.readlink(os.path.join(fd_dir, name)) != archive:
@@ -3259,16 +3755,26 @@ def archive_read_position(pid, archive):
             with open("/proc/%d/fdinfo/%s" % (pid, name)) as f:
                 for line in f:
                     if line.startswith("pos:"):
-                        return int(line.split()[1])
+                        pos = int(line.split()[1])
+                        best = pos if best is None else max(best, pos)
+                        break
         except (OSError, ValueError, IndexError):
             continue
-    return None
+    return best
 
 
-def run_bsdtar(argv, req_id, cancel_event, total, measure, on_entry=None, stdin_data=None):
-    proc = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=trusted_env(),
-                            close_fds=True, start_new_session=True)
+def run_bsdtar(argv, req_id, cancel_event, total, measure, on_entry=None, stdin_data=None,
+               stdin_fd=None, stdout_fd=None, pass_fds=()):
+    if stdin_data is not None:
+        stdin = subprocess.PIPE
+    elif stdin_fd is not None:
+        stdin = stdin_fd
+    else:
+        stdin = subprocess.DEVNULL
+    proc = subprocess.Popen(argv, stdin=stdin,
+                            stdout=subprocess.DEVNULL if stdout_fd is None else stdout_fd,
+                            stderr=subprocess.PIPE, env=trusted_env(),
+                            close_fds=True, pass_fds=tuple(pass_fds), start_new_session=True)
     if stdin_data is not None:
         def feed():
             try:
@@ -3347,53 +3853,73 @@ def run_bsdtar(argv, req_id, cancel_event, total, measure, on_entry=None, stdin_
         proc.stderr.close()
 
 
-def run_extract(argv, archive, req_id, cancel_event):
-    real = os.path.realpath(archive)
-    return run_bsdtar(argv, req_id, cancel_event, os.path.getsize(archive),
-                      lambda pid: archive_read_position(pid, real))
-
-
 def op_extract(req, cancel_event):
     req_id = req["id"]
     path = req.get("path")
-    if not isinstance(path, str) or not os.path.isfile(path):
-        send_error(req_id, "EINVAL", "an archive file is required", path if isinstance(path, str) else None)
+    if not isinstance(path, str):
+        send_error(req_id, "EINVAL", "an archive file is required")
         return
-    dest_dir = os.path.dirname(path)
     try:
-        work = tempfile.mkdtemp(prefix=".omafile-extract-", dir=dest_dir)
+        pfd, arch_name = open_parent_safely(to_bytes(path))
     except OSError as e:
-        send_error(req_id, errno_code(e), e.strerror or str(e), dest_dir)
+        send_error(req_id, "EINVAL" if e.errno == errno.ENOENT else errno_code(e), e.strerror or str(e), path)
         return
+    arch_fd = None
+    work_fd = None
+    work_name = None
+
+    def drop_work():
+        nonlocal work_name
+        if work_name is not None:
+            try:
+                shutil.rmtree(work_name, dir_fd=pfd)
+            except OSError:
+                pass
+            work_name = None
+
     try:
+        st = None
         try:
-            argv = extract_argv(path, work)
+            arch_fd = os.open(arch_name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=pfd)
+            st = os.fstat(arch_fd)
+        except OSError:
+            pass
+        if st is None or not stat.S_ISREG(st.st_mode):
+            send_error(req_id, "EINVAL", "an archive file is required", path)
+            return
+        os.set_blocking(arch_fd, True)
+        work_name = make_work_dir(pfd, b".omafile-extract-")
+        work_fd = os.open(work_name, PATH_OPEN_FLAGS | os.O_NOFOLLOW, dir_fd=pfd)
+        try:
+            argv = extract_argv(work_fd)
         except FileNotFoundError:
             send_error(req_id, "EUNSUPPORTED", "bsdtar is not installed", path)
             return
-        code, err = run_extract(argv, path, req_id, cancel_event)
+        real = os.readlink("/proc/self/fd/%d" % arch_fd)
+        code, err = run_bsdtar(argv, req_id, cancel_event, st.st_size,
+                               lambda pid: archive_read_position(pid, real),
+                               stdin_fd=arch_fd, pass_fds=(work_fd,))
         if code != 0:
-            shutil.rmtree(work, ignore_errors=True)
+            drop_work()
             send_error(req_id, "ECANCELED" if code == -1 else "EFAIL", err or "could not extract", path)
             return
-        items = os.listdir(work)
-        dest_bytes = to_bytes(dest_dir)
+        items = os.listdir(fd_path(work_fd, b"."))
         if len(items) == 1:
-            final = os.path.join(dest_bytes, unique_dest_name(dest_bytes, to_bytes(items[0])))
-            os.rename(os.path.join(work, items[0]), final)
+            final = place_unique(items[0], work_fd, items[0], pfd)
         else:
-            stem = to_bytes(archive_stem(os.path.basename(path)))
-            final = os.path.join(dest_bytes, unique_dest_name(dest_bytes, stem))
-            os.rename(work, final)
-            work = None
-        send_done(req_id, path=to_str(final))
+            final = place_unique(work_name, pfd, to_bytes(archive_stem(os.path.basename(path))), pfd)
+            work_name = None
+        drop_work()
+        send_done(req_id, path=to_str(os.path.join(to_bytes(os.path.dirname(path)), final)))
     except OSError as e:
-        if work:
-            shutil.rmtree(work, ignore_errors=True)
+        drop_work()
         send_error(req_id, errno_code(e), e.strerror or str(e), path)
     finally:
-        if work and os.path.isdir(work):
-            shutil.rmtree(work, ignore_errors=True)
+        for fd in (arch_fd, work_fd):
+            if fd is not None:
+                os.close(fd)
+        drop_work()
+        os.close(pfd)
 
 
 COMPRESS_SUFFIXES = (".zip", ".tar.xz", ".tar.gz", ".7z")
@@ -3407,34 +3933,38 @@ def compress_suffix(name):
     return ""
 
 
-def unique_archive_name(dest_bytes, name):
-    suffix = compress_suffix(name)
-    stem = name[:-len(suffix)]
-    candidate = name
+COMPRESS_FORMATS = {
+    ".zip": ["--format", "zip"],
+    ".tar.xz": ["--format", "paxr", "-J"],
+    ".tar.gz": ["--format", "paxr", "-z"],
+    ".7z": ["--format", "7zip"],
+}
+
+
+def unique_archive_name(dir_fd, name):
+    text = to_str(name)
+    suffix = compress_suffix(text)
+    stem = text[:-len(suffix)]
+    candidate = text
     n = 1
-    while os.path.lexists(os.path.join(dest_bytes, to_bytes(candidate))):
+    while lstat_at(dir_fd, to_bytes(candidate)) is not None:
         candidate = "%s (%d)%s" % (stem, n, suffix)
         n += 1
-    return candidate
+    return to_bytes(candidate)
 
 
-def compress_sizes(parent_bytes, names):
+def compress_sizes(parent_fd, names):
     sizes = {}
     for name in names:
-        top = os.path.join(parent_bytes, name)
-        lst = os.lstat(top)
+        lst = os.lstat(name, dir_fd=parent_fd)
         sizes[to_str(name)] = lst.st_size if stat.S_ISREG(lst.st_mode) else 0
         if not stat.S_ISDIR(lst.st_mode):
             continue
-        for dirpath, dirnames, filenames in os.walk(top, followlinks=False):
+        for dirpath, _, filenames, dirfd in os.fwalk(name, dir_fd=parent_fd, follow_symlinks=False):
             for child in filenames:
-                full = os.path.join(dirpath, child)
-                try:
-                    child_lst = os.lstat(full)
-                except OSError:
-                    continue
-                if stat.S_ISREG(child_lst.st_mode):
-                    sizes[to_str(os.path.relpath(full, parent_bytes))] = child_lst.st_size
+                child_lst = lstat_at(dirfd, child)
+                if child_lst is not None and stat.S_ISREG(child_lst.st_mode):
+                    sizes[to_str(os.path.join(dirpath, child))] = child_lst.st_size
     return sizes
 
 
@@ -3443,59 +3973,78 @@ def op_compress(req, cancel_event):
     paths = req.get("paths")
     name = req.get("name")
     if (not isinstance(paths, list) or not paths or not all(isinstance(p, str) and os.path.isabs(p) for p in paths)
-            or not isinstance(name, str) or "/" in name or name in (".", "..") or not compress_suffix(name)):
+            or not isinstance(name, str) or not valid_leaf(to_bytes(name)) or not compress_suffix(name)):
         send_error(req_id, "EINVAL", "absolute paths and an archive name ending in .zip, .tar.xz, .tar.gz or .7z are required")
         return
     parent = os.path.dirname(os.path.normpath(paths[0]))
     names = []
     for p in paths:
         p = os.path.normpath(p)
-        if os.path.dirname(p) != parent or p == parent:
+        leaf = to_bytes(os.path.basename(p))
+        if os.path.dirname(p) != parent or p == parent or not valid_leaf(leaf):
             send_error(req_id, "EINVAL", "every item must be in the same folder", p)
             return
-        if not os.path.lexists(p):
-            send_error(req_id, "ENOENT", "no such file or directory", p)
-            return
-        names.append(to_bytes(os.path.basename(p)))
-    parent_bytes = to_bytes(parent)
+        names.append(leaf)
     try:
-        sizes = compress_sizes(parent_bytes, names)
-        fd, work = tempfile.mkstemp(prefix=".omafile-compress-", suffix=compress_suffix(name), dir=parent)
-        os.close(fd)
+        pfd = open_dir_safely(to_bytes(parent))
     except OSError as e:
         send_error(req_id, errno_code(e), e.strerror or str(e), parent)
         return
+    work = None
+    out_fd = None
     try:
+        for leaf, p in zip(names, paths):
+            if lstat_at(pfd, leaf) is None:
+                send_error(req_id, "ENOENT", "no such file or directory", os.path.normpath(p))
+                return
+        suffix = compress_suffix(name)
         try:
-            argv = [trusted_program("bsdtar"), "-a", "-cvf", work, "-C", parent, "--null", "-T", "-"]
+            program = trusted_program("bsdtar")
         except FileNotFoundError:
-            os.unlink(work)
             send_error(req_id, "EUNSUPPORTED", "bsdtar is not installed", parent)
             return
+        sizes = compress_sizes(pfd, names)
+        while True:
+            work = b".omafile-compress-" + os.urandom(6).hex().encode() + to_bytes(suffix)
+            try:
+                out_fd = os.open(work, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=pfd)
+                break
+            except FileExistsError:
+                continue
+        argv = [program, "-cv"] + COMPRESS_FORMATS[suffix.lower()] + [
+            "-f", "-", "-C", "/proc/self/fd/%d" % pfd, "--null", "-T", "-"]
         done = [0]
 
         def counted(entry):
             done[0] += sizes.get(entry, 0)
 
         code, err = run_bsdtar(argv, req_id, cancel_event, sum(sizes.values()), lambda pid: done[0],
-                               on_entry=counted, stdin_data=b"".join(n + b"\0" for n in names))
+                               on_entry=counted, stdin_data=b"".join(n + b"\0" for n in names),
+                               stdout_fd=out_fd, pass_fds=(pfd,))
+        os.close(out_fd)
+        out_fd = None
         if code != 0:
-            os.unlink(work)
+            try:
+                os.unlink(work, dir_fd=pfd)
+            except OSError:
+                pass
+            work = None
             send_error(req_id, "ECANCELED" if code == -1 else "EFAIL", err or "could not compress", parent)
             return
-        while True:
-            final = os.path.join(parent_bytes, to_bytes(unique_archive_name(parent_bytes, name)))
-            try:
-                os.link(work, final)
-                break
-            except FileExistsError:
-                continue
-        os.unlink(work)
-        send_done(req_id, path=to_str(final))
+        final = place_unique(work, pfd, to_bytes(name), pfd, pick=unique_archive_name)
+        work = None
+        send_done(req_id, path=to_str(os.path.join(to_bytes(parent), final)))
     except OSError as e:
-        if os.path.lexists(work):
-            os.unlink(work)
         send_error(req_id, errno_code(e), e.strerror or str(e), parent)
+    finally:
+        if out_fd is not None:
+            os.close(out_fd)
+        if work is not None:
+            try:
+                os.unlink(work, dir_fd=pfd)
+            except OSError:
+                pass
+        os.close(pfd)
 
 
 CANCELLABLE_OPS = {
@@ -3519,6 +4068,7 @@ CANCELLABLE_OPS = {
 SIMPLE_OPS = {
     "clipset": op_clipset,
     "clipget": op_clipget,
+    "cliptext": op_cliptext,
     "clipimage": op_clipimage,
     "clipclear": op_clipclear,
     "samedev": op_samedev,
@@ -3567,6 +4117,9 @@ def dispatch(req):
         if op in CANCELLABLE_OPS:
             handler = CANCELLABLE_OPS[op]
             ev = register_inflight(req_id, op)
+            if ev is None:
+                send_error(req_id, "EBUSY", "a request with this id is already running")
+                return
             try:
                 handler(req, ev)
             finally:
@@ -3585,7 +4138,8 @@ def dispatch(req):
 ACTIVE_THREADS_LOCK = threading.Lock()
 ACTIVE_THREADS = []
 
-def run_and_untrack(req, t):
+def run_and_untrack(req):
+    t = threading.current_thread()
     try:
         dispatch(req)
     finally:
@@ -3593,32 +4147,42 @@ def run_and_untrack(req, t):
             if t in ACTIVE_THREADS:
                 ACTIVE_THREADS.remove(t)
 
+def handle_line(raw):
+    line = raw.decode("utf-8", "surrogatepass").strip()
+    if not line:
+        return
+    try:
+        req = json.loads(line)
+    except ValueError:
+        sys.stderr.write("malformed request line\n")
+        sys.stderr.flush()
+        return
+    if not isinstance(req, dict) or "op" not in req or "id" not in req:
+        if isinstance(req, dict) and "id" in req:
+            send_error(req["id"], "EINVAL", "missing op")
+        return
+    t = threading.Thread(target=run_and_untrack, args=(req,), daemon=True)
+    with ACTIVE_THREADS_LOCK:
+        ACTIVE_THREADS.append(t)
+    try:
+        t.start()
+    except RuntimeError:
+        with ACTIVE_THREADS_LOCK:
+            if t in ACTIVE_THREADS:
+                ACTIVE_THREADS.remove(t)
+        send_error(req["id"], "EAGAIN", "the helper is too busy, try again")
+
 def main():
     try:
-        sys.stdin.reconfigure(encoding="utf-8", errors="strict")
         sys.stdout.reconfigure(encoding="utf-8", errors="strict")
     except AttributeError:
         pass
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
+    for raw in sys.stdin.buffer:
         try:
-            req = json.loads(line)
-        except ValueError:
-            sys.stderr.write("malformed request line\n")
+            handle_line(raw)
+        except Exception as e:
+            sys.stderr.write("bad request line: %s\n" % e)
             sys.stderr.flush()
-            continue
-        if not isinstance(req, dict) or "op" not in req or "id" not in req:
-            if isinstance(req, dict) and "id" in req:
-                send_error(req["id"], "EINVAL", "missing op")
-            continue
-        holder = []
-        t = threading.Thread(target=lambda: run_and_untrack(req, holder[0]), daemon=True)
-        holder.append(t)
-        with ACTIVE_THREADS_LOCK:
-            ACTIVE_THREADS.append(t)
-        t.start()
     deadline = time.monotonic() + 15.0
     while time.monotonic() < deadline:
         with ACTIVE_THREADS_LOCK:

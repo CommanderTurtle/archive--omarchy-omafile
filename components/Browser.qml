@@ -371,6 +371,31 @@ Item {
   readonly property bool pickSaving: picking && (pick.mode === "save" || pick.mode === "savefiles")
   readonly property bool pickNeedsName: picking && pick.mode === "save"
   property int pickFilter: -1
+  readonly property var pickBlockedActions: ({
+    cut: true, paste: true, rename: true, trash: true, delete: true, restore: true, emptytrash: true,
+    extract: true, compress: true, properties: true, newfile: true, terminal: true, claude: true,
+    openwith: true, undo: true, redo: true, drop: true, transfer: true,
+    "place:emptytrash": true, "place:properties": true
+  })
+
+  function pickAllows(action) {
+    if (!picking || pickBlockedActions[action] !== true) return true
+    statusText = "Not available while choosing for an app"
+    return false
+  }
+
+  function withoutPickBlocked(items) {
+    if (!picking) return items
+    var out = []
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i]
+      if (pickBlockedActions[item.key] === true) continue
+      if (item.label === "" && (out.length === 0 || out[out.length - 1].label === "")) continue
+      out.push(item)
+    }
+    while (out.length > 0 && out[out.length - 1].label === "") out.pop()
+    return out
+  }
 
   Component.onDestruction: {
     if (pickerRequest) answerPick({ ok: false })
@@ -394,11 +419,36 @@ Item {
 
   function pickTitle() {
     if (!picking) return ""
+    var app = pickAppLabel()
+    return app ? pickBaseTitle() + " (" + app + ")" : pickBaseTitle()
+  }
+
+  function pickBaseTitle() {
     if (pick.title) return String(pick.title)
     if (pick.mode === "save") return "Save file"
     if (pick.mode === "savefiles") return "Choose a folder to save into"
     if (pick.directory) return "Choose a folder"
     return pick.multiple ? "Choose files" : "Choose a file"
+  }
+
+  function pickAppLabel() {
+    var id = String((picking && pick.appId) || "")
+    return /^[A-Za-z0-9._-]{1,255}$/.test(id) ? "for " + id : ""
+  }
+
+  function pickLinkNames(entries) {
+    var out = []
+    for (var i = 0; i < entries.length; i++) if (entries[i].isLink || entries[i].isBroken) out.push(entries[i].name)
+    return out
+  }
+
+  function askPickReplace(name, target) {
+    confirmAction = "pickreplace"
+    confirm.message = "\"" + name + "\" already exists. Replace it?"
+    confirm.confirmText = "Replace"
+    dialogPayload = [target]
+    confirm.opened = true
+    keyCatcher.forceActiveFocus()
   }
 
   function pickAcceptLabel() {
@@ -448,8 +498,12 @@ Item {
   function pickTargetFolder() {
     var p = activePane()
     var sel = p.selectedEntries
-    if (sel.length === 1 && sel[0].isDir) return sel[0].path
-    return p.virtualView ? "" : p.path
+    if (sel.length === 1 && sel[0].isDir) {
+      if (!sel[0].isLink) return sel[0].path
+      statusText = "\"" + sel[0].name + "\" is a link. Open it and choose from inside"
+      return null
+    }
+    return p.virtualView ? "" : (p.realPath || p.path)
   }
 
   function acceptPick(entries) {
@@ -461,23 +515,30 @@ Item {
       if (name.indexOf("/") >= 0) { statusText = "The name cannot contain a slash"; return }
       if (!Model.isPlainFileName(name)) { statusText = "That name is not allowed"; return }
       if (p.virtualView) { statusText = "Pick a folder to save into"; return }
-      var target = Model.joinPath(p.path, name)
-      for (var i = 0; i < p.rows.length; i++) {
-        if (p.rows[i][0] === name) {
-          confirmAction = "pickreplace"
-          confirm.message = "\"" + name + "\" already exists. Replace it?"
-          confirm.confirmText = "Replace"
-          dialogPayload = [target]
-          confirm.opened = true
-          keyCatcher.forceActiveFocus()
+      var target = Model.joinPath(p.realPath || p.path, name)
+      var request = pick
+      service.statPaths([target], function (items) {
+        if (root.pick !== request) return
+        var item = items && items.length > 0 ? items[0] : null
+        if (item && item.error === "ENOENT") {
+          root.completePick([target])
           return
         }
-      }
-      completePick([target])
+        if (item && !item.error && item.linkTarget !== null && item.linkTarget !== undefined) {
+          root.statusText = "\"" + name + "\" is a link. Choose another name"
+          return
+        }
+        if (!item || item.error) {
+          root.statusText = "Could not check \"" + name + "\""
+          return
+        }
+        root.askPickReplace(name, target)
+      })
       return
     }
     if (pick.mode === "savefiles") {
       var folder = pickTargetFolder()
+      if (folder === null) return
       if (!folder) { statusText = "Pick a folder to save into"; return }
       var names = pick.files || []
       var out = []
@@ -498,6 +559,11 @@ Item {
       return
     }
     var chosen = entries || p.selectedEntries
+    var links = pickLinkNames(chosen)
+    if (links.length > 0) {
+      statusText = "\"" + links[0] + "\" is a link. Choose the file it points to instead"
+      return
+    }
     var files = []
     for (var k = 0; k < chosen.length; k++) if (!chosen[k].isDir) files.push(chosen[k].path)
     if (files.length === 0) {
@@ -545,10 +611,12 @@ Item {
     })
   }
   function closeDialog() {
+    if (dialogMode === "properties") stopUsageScan()
     dialogMode = ""
     dialogPayload = null
     dialogError = ""
     keyCatcher.forceActiveFocus()
+    if (pendingConflicts.length > 0) Qt.callLater(showNextConflict)
   }
   property string quickConnecting: ""
   function openServer(uri) {
@@ -665,6 +733,7 @@ Item {
     statusText = Model.formatCount(paths.length, "item copied", "items copied")
   }
   function doCut() {
+    if (!pickAllows("cut")) return
     var p = activePane()
     var paths = p.selectedPaths()
     if (paths.length === 0) return
@@ -672,7 +741,7 @@ Item {
     statusText = Model.formatCount(paths.length, "item cut", "items cut")
   }
   function doPaste() {
-    if (!service) return
+    if (!service || !pickAllows("paste")) return
     var pane = activePane()
     if (pane.virtualView || !pane.path) return
     var dest = pane.path
@@ -690,7 +759,7 @@ Item {
         root.statusText = "Nothing to paste"
         return
       }
-      service.beginTransfer(clip.mode === "cut" ? "move" : "copy", clip.paths, dest, "ask")
+      service.beginTransfer(clip.mode === "cut" ? "move" : "copy", clip.paths, dest, "ask", root)
       if (clip.mode === "cut") {
         service.clearClipboard()
         service.clearSystemClipboard()
@@ -700,7 +769,7 @@ Item {
 
   function handleDrop(urls, dest, position) {
     closeMenu()
-    if (!service) return
+    if (!service || !pickAllows("drop")) return
     var paths = []
     for (var i = 0; i < urls.length; i++) {
       var u = String(urls[i])
@@ -746,7 +815,8 @@ Item {
   }
 
   function transferDrop(action, paths, dest) {
-    service.beginTransfer(action, paths, dest, "ask")
+    if (!pickAllows("drop")) return
+    service.beginTransfer(action, paths, dest, "ask", root)
     statusText = (action === "move" ? "Moving " : "Copying ") + Model.formatCount(paths.length, "item", "items")
       + " to " + Model.basename(dest)
   }
@@ -766,12 +836,12 @@ Item {
     setViewScale(viewScale + delta)
   }
   function transferToOtherPane(op) {
-    if (!split) return
+    if (!split || !pickAllows("transfer")) return
     var from = activePane()
     var to = paneFor(otherSide())
     var paths = from.selectedPaths()
     if (paths.length === 0) return
-    service.beginTransfer(op, paths, to.path, "ask")
+    service.beginTransfer(op, paths, to.path, "ask", root)
   }
   function trashRoot() {
     return service && typeof service.trashFilesPath === "function" ? service.trashFilesPath() : ""
@@ -780,6 +850,7 @@ Item {
     return p !== null && p !== undefined && !p.virtualView && Model.isTrashPath(p.path, trashRoot())
   }
   function doTrash(given) {
+    if (!pickAllows("trash")) return
     var paths = given || activePane().selectedPaths()
     if (paths.length === 0) return
     if (Model.allInTrash(paths, trashRoot())) return askDelete(paths)
@@ -792,11 +863,13 @@ Item {
     confirm.opened = true
   }
   function performTrash(paths) {
+    if (!pickAllows("trash")) return
     var p = activePane()
     service.trashPaths(paths, function () { p.refresh() }, null)
     statusText = Model.formatCount(paths.length, "item moved to trash", "items moved to trash")
   }
   function askDelete(paths) {
+    if (!pickAllows("delete")) return
     var targets = paths || activePane().selectedPaths()
     if (targets.length === 0) return
     if (service.settingNow("confirmDelete", true) !== true) return performDelete(targets)
@@ -807,6 +880,7 @@ Item {
     confirm.opened = true
   }
   function performDelete(paths) {
+    if (!pickAllows("delete")) return
     service.deletePaths(paths, function () { root.refreshPanes() }, null)
     statusText = Model.formatCount(paths.length, "item deleted", "items deleted")
   }
@@ -817,6 +891,7 @@ Item {
     return Model.trashItemNames(paths, trashRoot())
   }
   function doRestore() {
+    if (!pickAllows("restore")) return
     var names = restorablePaths()
     if (names.length === 0 || !service) return
     service.restoreFromTrash(names, function (m) {
@@ -832,6 +907,7 @@ Item {
     })
   }
   function askEmptyTrash() {
+    if (!pickAllows("emptytrash")) return
     if (!service || service.trashCount <= 0) return
     if (service.settingNow("confirmDelete", true) !== true) return performEmptyTrash()
     confirmAction = "emptytrash"
@@ -855,6 +931,7 @@ Item {
     statusText = "Trash emptied"
   }
   function doRename() {
+    if (!pickAllows("rename")) return
     var p = activePane()
     var entry = p.cursorEntry()
     var sel = p.selectedEntries
@@ -896,7 +973,7 @@ Item {
   }
 
   function extractArchives(entries) {
-    if (!service || entries.length === 0) return
+    if (!service || entries.length === 0 || !pickAllows("extract")) return
     var p = activePane()
     var pending = entries.length
     var failed = 0
@@ -947,6 +1024,7 @@ Item {
   }
 
   function askCompress(entry) {
+    if (!pickAllows("compress")) return
     var targets = compressTargets(entry)
     if (targets.length === 0) return
     showDialog("compress", "Compress " + (targets.length === 1 ? targets[0].name : Model.formatCount(targets.length, "item", "items")),
@@ -1050,7 +1128,7 @@ Item {
           disabled: !service || service.trashCount <= 0 })
       }
     }
-    return items
+    return withoutPickBlocked(items)
   }
   function placeOrderActions(row) {
     var items = []
@@ -1134,7 +1212,7 @@ Item {
       items.push({ key: "place:copypath", label: "Copy path", glyph: Icons.actionGlyph("copy") })
       items.push({ key: "place:properties", label: "Properties", glyph: Icons.actionGlyph("properties") })
     }
-    return withPlaceOrderActions(items, row)
+    return withoutPickBlocked(withPlaceOrderActions(items, row))
   }
   function openPlaceMenu(row, x, y) {
     var pt = sidebar.mapToItem(keyCatcher, x, y)
@@ -1147,7 +1225,7 @@ Item {
     menuOpen = true
   }
   function runPlaceAction(action, row) {
-    if (!row) return
+    if (!row || !pickAllows("place:" + action)) return
     var path = String(row.path || "")
     if (action === "open") activePane().navigate(path)
     else if (action === "tab") newTab(activeSide, path)
@@ -1262,6 +1340,7 @@ Item {
     var entry = menuEntry
     menuOpen = false
     menuKind = ""
+    if (!pickAllows(key)) return
     if (key.indexOf("sort:") === 0) applySortPreset(key.substring(5))
     else if (key.indexOf("view:") === 0) setView(key.substring(5))
     else if (key === "preview") showPreview(entry)
@@ -1308,7 +1387,12 @@ Item {
   property int previewToken: 0
   property real previewVolume: 1
   property bool previewMuted: false
-  readonly property string previewKind: Model.previewKind(previewEntry)
+  readonly property string previewKind: {
+    var kind = Model.previewKind(previewEntry)
+    if (kind === "audio" && service && typeof service.isRemotePath === "function" && service.isRemotePath(previewEntry.path))
+      return "remoteaudio"
+    return kind
+  }
 
   function showPreview(entry) {
     if (!entry) return
@@ -1421,8 +1505,13 @@ Item {
       if (items && items.length > 0 && root.dialogMode === "properties") root.propsInfo = items[0]
     })
   }
+  function stopUsageScan() {
+    if (propsDuId && service) service.cancel(propsDuId)
+    propsDuId = 0
+  }
   function showProperties(entry) {
-    if (!entry) return
+    if (!entry || !pickAllows("properties")) return
+    stopUsageScan()
     propsInfo = null
     propsBytes = 0
     propsFiles = 0
@@ -1439,7 +1528,10 @@ Item {
         root.propsBytes = Number(m.bytes) || 0
         root.propsFiles = Number(m.files) || 0
         root.propsDirs = Number(m.dirs) || 0
-      }, function () { root.propsUsageDone = true })
+      }, function () {
+        root.propsUsageDone = true
+        root.propsDuId = 0
+      })
     }
   }
   function enterFind() {
@@ -1600,7 +1692,7 @@ Item {
   }
 
   function doUndo() {
-    if (!service) return
+    if (!service || !pickAllows("undo")) return
     service.undo(function (entry) {
       root.statusText = "Undone: " + String(entry.label || "")
       root.refreshPanes()
@@ -1610,7 +1702,7 @@ Item {
   }
 
   function doRedo() {
-    if (!service) return
+    if (!service || !pickAllows("redo")) return
     service.redo(function (entry) {
       root.statusText = "Redone: " + String(entry.label || "")
       root.refreshPanes()
@@ -1787,6 +1879,7 @@ Item {
   function handleKey(event) {
     if (confirm.opened) return confirm.handleKey(event)
     if (dialogMode === "conflict") {
+      if (Date.now() - conflictShownMs < conflictKeyDelay) return true
       if (event.key === Qt.Key_Escape) { resolveConflict("skip", false); return true }
       if (event.key === Qt.Key_R) { resolveConflict("overwrite", false); return true }
       if (event.key === Qt.Key_K) { resolveConflict("rename", false); return true }
@@ -1911,10 +2004,10 @@ Item {
     if (ctrl && shiftKey && event.key === Qt.Key_I) { p.invertSelection(); return true }
     if (ctrl && shiftKey && event.key === Qt.Key_Z) { doRedo(); return true }
 
-    if (ctrl && event.key === Qt.Key_N) { showDialog("newfile", "New file", "untitled", null); return true }
+    if (ctrl && event.key === Qt.Key_N) { if (pickAllows("newfile")) showDialog("newfile", "New file", "untitled", null); return true }
     if (ctrl && event.key === Qt.Key_O) { openSelectedItems(); return true }
     if (ctrl && event.key === Qt.Key_T) { newTab(activeSide, null); return true }
-    if (ctrl && event.key === Qt.Key_Period) { if (!p.virtualView) service.openTerminal(p.path); return true }
+    if (ctrl && event.key === Qt.Key_Period) { if (!p.virtualView && pickAllows("terminal")) service.openTerminal(p.path); return true }
     if (ctrl && event.key === Qt.Key_W) { closeTab(activeSide, activeIndexFor(activeSide)); return true }
     if (ctrl && event.key === Qt.Key_Q) { requestClose(); return true }
     if (ctrl && event.key === Qt.Key_L) { pathBar.beginEdit(); return true }
@@ -2020,7 +2113,9 @@ Item {
     target: root.service
     enabled: root.service !== null
     function onConflictRaised(jobId, info) {
-      root.showDialog("conflict", "File exists", "", { jobId: jobId, info: info })
+      var owner = typeof root.service.transferOwner === "function" ? root.service.transferOwner(jobId) : null
+      if (owner && owner !== root) return
+      root.presentConflict(jobId, info)
     }
   }
   Item {
@@ -2241,6 +2336,7 @@ Item {
               id: paneA
               width: parent.width
               patterns: root.picking ? root.pickPatterns() : []
+              picking: root.picking
               height: parent.height - (tabStripA.visible ? tabStripA.height : 0)
                 - (trashBarA.visible ? trashBarA.height : 0)
               service: root.service
@@ -2304,6 +2400,7 @@ Item {
               id: paneB
               width: parent.width
               patterns: root.picking ? root.pickPatterns() : []
+              picking: root.picking
               height: parent.height - (tabStripB.visible ? tabStripB.height : 0)
                 - (trashBarB.visible ? trashBarB.height : 0)
               service: root.service
@@ -2370,10 +2467,9 @@ Item {
             elide: Text.ElideRight
           }
 
-          TextField {
+          EditField {
             id: pickNameField
             objectName: "pickNameField"
-            readOnly: !visible
             anchors.verticalCenter: parent.verticalCenter
             width: pickLeft.width - pickTitleText.width - pickLeft.spacing
             visible: root.pickNeedsName
@@ -2449,6 +2545,7 @@ Item {
                 return Model.formatCount(p.rows.length, "match", "matches")
                   + (p.searchTruncated ? " (truncated)" : "")
               return Model.formatCount(p.rows.length, "item", "items")
+                + (p.truncated ? " (folder too large, showing the first " + p.total + ")" : "")
             }
             color: Util.alpha(Color.foreground, 0.6)
             font.family: Style.font.family
@@ -2891,7 +2988,7 @@ Item {
             source: "AudioPreview.qml"
             onLoaded: {
               item.service = Qt.binding(function () { return root.service })
-              item.thumbnails = Qt.binding(function () { return root.boolSetting("thumbnails", true) })
+              item.thumbnails = Qt.binding(function () { return root.boolSetting("thumbnails", true) && !root.picking })
               item.volume = Qt.binding(function () { return root.previewVolume })
               item.muted = Qt.binding(function () { return root.previewMuted })
               item.entry = Qt.binding(function () { return root.previewKind === "audio" ? root.previewEntry : null })
@@ -2906,7 +3003,7 @@ Item {
           Column {
             anchors.centerIn: parent
             spacing: Style.space(10)
-            visible: root.previewKind === "folder" || root.previewKind === "none"
+            visible: root.previewKind === "folder" || root.previewKind === "none" || root.previewKind === "remoteaudio"
               || (root.previewKind === "text" && (root.previewBinary || root.previewLoading))
               || (root.previewKind === "image" && previewImage.status === Image.Error)
               || (root.previewKind === "audio" && audioPreview.status === Loader.Error)
@@ -2925,8 +3022,9 @@ Item {
               anchors.horizontalCenter: parent.horizontalCenter
               text: root.previewLoading ? "Reading"
                 : (root.previewKind === "folder" ? "Folder. Press Enter to open it."
+                  : (root.previewKind === "remoteaudio" ? "Audio preview is off for network folders. Press Enter to open it."
                   : (root.previewKind === "audio" ? "Playing audio here needs the qt6-multimedia package"
-                    : "No preview for this kind of file"))
+                    : "No preview for this kind of file")))
               color: Util.alpha(Color.popups.text, 0.55)
               font.family: Style.font.family
               font.pixelSize: Style.font.body
@@ -2986,10 +3084,9 @@ Item {
             font.pixelSize: Style.font.subtitle
           }
 
-          TextField {
+          EditField {
             id: dialogField
             objectName: "dialogField"
-            readOnly: !visible
             width: parent.width
             visible: root.dialogMode === "rename" || root.dialogMode === "newfolder"
               || root.dialogMode === "newfile" || root.dialogMode === "path"
@@ -3024,9 +3121,8 @@ Item {
             wrapMode: Text.Wrap
           }
 
-          TextField {
+          EditField {
             id: appField
-            readOnly: !visible
             width: parent.width
             visible: root.dialogMode === "openwith"
             placeholderText: "Search applications or type a command"
@@ -3342,8 +3438,7 @@ Item {
                     text: "Start folder"
                   }
 
-                  TextField {
-                    readOnly: !visible
+                  EditField {
                     width: parent.width
                     text: root.textSetting("homePath", "")
                     placeholderText: "Your home folder"
@@ -3522,8 +3617,7 @@ Item {
                     text: "Terminal"
                   }
 
-                  TextField {
-                    readOnly: !visible
+                  EditField {
                     width: parent.width
                     text: root.textSetting("terminal", "")
                     placeholderText: "System default"
@@ -3535,8 +3629,7 @@ Item {
                     text: "Editor"
                   }
 
-                  TextField {
-                    readOnly: !visible
+                  EditField {
                     width: parent.width
                     text: root.textSetting("editor", "")
                     placeholderText: "Omarchy default"
@@ -3599,8 +3692,7 @@ Item {
                     text: "Bar glyph"
                   }
 
-                  TextField {
-                    readOnly: !visible
+                  EditField {
                     width: parent.width
                     text: root.textSetting("glyph", "")
                     placeholderText: "Folder"
@@ -3669,10 +3761,9 @@ Item {
               wrapMode: Text.Wrap
             }
 
-            TextField {
+            EditField {
               id: serverField
               objectName: "serverField"
-              readOnly: !visible
               width: parent.width
               placeholderText: "smb://server/share"
               onAccepted: root.submitConnect()
@@ -3687,28 +3778,25 @@ Item {
               onClicked: root.connectAnonymous = !root.connectAnonymous
             }
 
-            TextField {
+            EditField {
               id: userField
               objectName: "userField"
-              readOnly: !visible
               width: parent.width
               visible: !root.connectAnonymous
               placeholderText: "User name"
               Keys.onEscapePressed: root.closeDialog()
             }
 
-            TextField {
+            EditField {
               id: domainField
-              readOnly: !visible
               width: parent.width
               visible: !root.connectAnonymous
               placeholderText: "Domain or workgroup, optional"
               Keys.onEscapePressed: root.closeDialog()
             }
 
-            TextField {
+            EditField {
               id: passwordField
-              readOnly: !visible
               width: parent.width
               visible: !root.connectAnonymous
               placeholderText: "Password"
@@ -3843,6 +3931,7 @@ Item {
       id: confirm
       anchors.fill: parent
       cancelText: "Cancel"
+      onOpenedChanged: if (!opened && root.pendingConflicts.length > 0) Qt.callLater(root.showNextConflict)
       onCanceled: {
         confirm.opened = false
         root.dialogPayload = null
@@ -4053,10 +4142,30 @@ Item {
     return "\"" + Model.basename(String(info.dest || "")) + "\" already exists in this folder."
   }
 
+  property var pendingConflicts: []
+  property double conflictShownMs: 0
+  readonly property int conflictKeyDelay: 600
+
+  function presentConflict(jobId, info) {
+    if (dialogMode !== "" || confirm.opened) {
+      pendingConflicts = pendingConflicts.concat([{ jobId: jobId, info: info }])
+      return
+    }
+    conflictShownMs = Date.now()
+    showDialog("conflict", "File exists", "", { jobId: jobId, info: info })
+  }
+
+  function showNextConflict() {
+    if (dialogMode !== "" || confirm.opened || pendingConflicts.length === 0) return
+    var next = pendingConflicts[0]
+    pendingConflicts = pendingConflicts.slice(1)
+    presentConflict(next.jobId, next.info)
+  }
+
   function resolveConflict(action, applyAll) {
     var payload = dialogPayload
     closeDialog()
     if (!payload || !service) return
-    service.resolveConflict(payload.jobId, action, applyAll)
+    service.resolveConflict(payload.jobId, action, applyAll, payload.info ? payload.info.seq : undefined)
   }
 }

@@ -9,7 +9,7 @@ const vm = require('node:vm');
 function service() {
   const source = fs.readFileSync(path.join(__dirname, '..', 'Service.qml'), 'utf8');
   const requests = [];
-  const c = vm.createContext({ _clipboardRevision: 0, _clipboardWritePending: false, clipboard: { mode: '', paths: [] } });
+  const c = vm.createContext({ _clipboardRevision: 0, _clipboardWritePending: false, clipboard: { mode: '', paths: [] }, clipboardPathLimit: 3 });
   c.root = c;
   for (const match of source.matchAll(/^  function \w+\([^]*?^  }/gm)) vm.runInContext(match[0], c);
   c.request = (payload, handlers) => { requests.push({ payload, handlers }); return requests.length; };
@@ -51,4 +51,12 @@ test('clipget forwards image metadata through the existing callback', () => {
   c.readSystemClipboard(value => { result = value; });
   requests[0].handlers.onDone({ mode: 'copy', paths: [], image: 'image/png' });
   assert.equal(result.image, 'image/png');
+});
+
+test('a huge clipboard file list is capped before the shell keeps it', () => {
+  const { c, requests } = service();
+  let result;
+  c.readSystemClipboard(value => { result = value; });
+  requests[0].handlers.onDone({ mode: 'copy', paths: ['/a', '/b', '/c', '/d', '/e'] });
+  assert.deepEqual(JSON.parse(JSON.stringify(result.paths)), ['/a', '/b', '/c']);
 });

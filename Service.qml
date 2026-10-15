@@ -406,6 +406,13 @@ Item {
     })
   }
 
+  function previewAudio(path, onReady, onError) {
+    return request({ op: "audiopreview", path: path }, {
+      onDone: function (m) { onReady(m) },
+      onError: function (m) { if (onError) onError(m) }
+    })
+  }
+
   function thumbnailFor(path, mtime, bucket, onReady) {
     var key = bucket + "|" + mtime + "|" + path
     if (_thumbCache[key] !== undefined) {

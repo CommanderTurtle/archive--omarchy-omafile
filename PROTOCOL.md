@@ -348,8 +348,13 @@ Replies `{"t": "thumb", "thumb": "/home/me/.cache/thumbnails/large/<md5>.png"}` 
 `done`. Cancellable. `size` is one of `large` (256 px, the default), `x-large` (512) or
 `xx-large` (1024). The cache follows the freedesktop Thumbnail Managing Standard, so
 thumbnails made by GNOME Files and other file managers are reused and theirs reuse ours.
-A cached thumbnail counts only when its `Thumb::URI` and `Thumb::MTime` match the file;
-the requested size and every larger one are tried.
+A cached thumbnail counts only when its `Thumb::URI` and `Thumb::MTime` match the file,
+it is no larger than 1024 px on either side, and it holds nothing but pixel chunks
+(`IHDR`, `PLTE`, `tRNS`, `IDAT`, `IEND`, `gAMA`, `sRGB`, `cHRM`, `sBIT`) plus at most 16 KB of
+`tEXt`; the requested size and every larger one are tried. Thumbnails the helper writes
+keep only those pixel chunks from the thumbnailer's output and add the `Thumb::` fields, so
+the shell never decodes metadata from a file it was shown. The shell shows images, including
+the full preview, only through this operation.
 
 On a miss the helper runs the system thumbnailer registered for the file's MIME type in
 `thumbnailers/*.thumbnailer` under `$XDG_DATA_HOME` and `$XDG_DATA_DIRS`, such as
@@ -359,6 +364,21 @@ that fails leaves a marker in `fail/omafile-<version>/`, and a failure recorded 
 any app is not retried until the file changes. Files without a thumbnailer, earlier
 failures and files inside the thumbnail cache fail with `EUNSUPPORTED`. A relative path
 fails with `EINVAL`.
+
+### audiopreview
+
+```
+{"id": N, "op": "audiopreview", "path": "/home/me/Music/song.mp3"}
+```
+
+Cancellable. Makes a copy of the first audio stream for the shell to play, so the shell's
+media player never parses the original file. Runs `ffprobe` for the `title`, `artist`,
+`album_artist` and `album` tags, each cut to 256 characters, and `ffmpeg -map 0:a:0 -c copy
+-map_metadata -1 -map_chapters -1` into a Matroska file in `$XDG_CACHE_HOME/omafile/preview`,
+mode 0600, with the source passed as an open handle. Cover art, other streams, chapters and
+tags are dropped. Replies `done` with `path`, `title`, `artist` and `album`. Only the two most
+recent copies are kept. Errors: `EINVAL` for anything that is not a regular file, `EFBIG` over
+1 GB, `EUNSUPPORTED` without ffmpeg, `ETIMEDOUT` after 90 seconds, `ECANCELED`, and `EFAIL`.
 
 ### thumbtypes
 

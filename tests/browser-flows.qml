@@ -189,7 +189,15 @@ ShellRoot {
         compare(call.args[0], "/tmp/alpha.yml")
         compare(call.args[2], "large")
         for (var i = 0; i < mock.calls.length; i++)
-          if (mock.calls[i].name === "thumbnailFor") verify(mock.calls[i].args[0] !== "/tmp/beta.png", "images load directly")
+          if (mock.calls[i].name === "thumbnailFor") verify(mock.calls[i].args[0] !== "/tmp/beta.png", "no thumbnailer is set up for png in the mock")
+        var grid = []
+        function walk(item) {
+          if (item.hasOwnProperty("generated") && item.hasOwnProperty("cachedPath")) grid.push(item)
+          for (var j = 0; j < item.children.length; j++) walk(item.children[j])
+        }
+        walk(browser)
+        verify(grid.length > 0)
+        for (var k = 0; k < grid.length; k++) verify(String(grid[k].source).indexOf("/tmp/beta.png") < 0, "images are never decoded straight from the file")
         browser.setView("list")
       }
 
@@ -805,6 +813,8 @@ ShellRoot {
         keyClick(Qt.Key_Right)
         compare(browser.previewEntry.name, "beta.png")
         compare(browser.previewKind, "image")
+        var shown = findChild(browser, "previewImage")
+        verify(String(shown.source).indexOf("/tmp/beta.png") < 0, "the original image never reaches the shell's decoder")
         keyClick(Qt.Key_Space)
         verify(!browser.previewOpen)
       }
@@ -820,6 +830,8 @@ ShellRoot {
         tryVerify(function () { return loader.status === Loader.Ready }, 5000, "audio player loads")
         var audio = loader.item
         tryVerify(function () { return audio.playing }, 5000, "audio starts on its own")
+        verify(mock.called("previewAudio") !== null, "the shell only plays a copy the helper cleaned")
+        compare(audio.title, "Tone", "the title comes from the helper, not from the file in the shell")
         tryVerify(function () { return audio.player.duration > 19000 }, 5000, "duration is read")
         verify(Math.abs(audio.player.audioOutput.volume - 0.1505) < 0.001, "the slider maps to output volume")
         verify(audio.player.audioOutput.muted, "the output starts muted")

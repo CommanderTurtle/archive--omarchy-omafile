@@ -1387,6 +1387,12 @@ Item {
   property int previewToken: 0
   property real previewVolume: 1
   property bool previewMuted: false
+  function previewThumbable() {
+    var e = previewEntry
+    if (!e || !service || !service.thumbExts || !boolSetting("thumbnails", true)) return false
+    return (Number(e.size) || 0) > 0 && service.thumbExts[e.ext] === true
+  }
+
   readonly property string previewKind: {
     var kind = Model.previewKind(previewEntry)
     if (kind === "audio" && service && typeof service.isRemotePath === "function" && service.isRemotePath(previewEntry.path))
@@ -2929,19 +2935,17 @@ Item {
           anchors.margins: Style.space(12)
           clip: true
 
-          Image {
+          ThumbImage {
             id: previewImage
+            objectName: "previewImage"
             anchors.fill: parent
-            visible: root.previewKind === "image"
-            source: root.previewOpen && root.previewKind === "image" && root.previewEntry
-              ? Util.fileUrl(root.previewEntry.path) : ""
+            service: root.service
+            active: root.previewOpen && root.previewKind === "image"
+            entry: active ? root.previewEntry : null
+            generated: active && root.previewThumbable()
+            requestSize: 1024
             sourceSize.width: Math.max(1, previewBody.width * 2)
             sourceSize.height: Math.max(1, previewBody.height * 2)
-            fillMode: Image.PreserveAspectFit
-            asynchronous: true
-            cache: false
-            smooth: true
-            mipmap: true
           }
 
           Flickable {
@@ -3005,7 +3009,7 @@ Item {
             spacing: Style.space(10)
             visible: root.previewKind === "folder" || root.previewKind === "none" || root.previewKind === "remoteaudio"
               || (root.previewKind === "text" && (root.previewBinary || root.previewLoading))
-              || (root.previewKind === "image" && previewImage.status === Image.Error)
+              || (root.previewKind === "image" && previewImage.status !== Image.Ready)
               || (root.previewKind === "audio" && audioPreview.status === Loader.Error)
 
             Text {
@@ -3021,10 +3025,12 @@ Item {
               textFormat: Text.PlainText
               anchors.horizontalCenter: parent.horizontalCenter
               text: root.previewLoading ? "Reading"
+                : (root.previewKind === "image" && !previewImage.failed && root.previewThumbable() ? "Making a preview"
+                : (root.previewKind === "image" ? "No preview for this image. Turn on Previews and thumbnails, or install a thumbnailer for it"
                 : (root.previewKind === "folder" ? "Folder. Press Enter to open it."
                   : (root.previewKind === "remoteaudio" ? "Audio preview is off for network folders. Press Enter to open it."
                   : (root.previewKind === "audio" ? "Playing audio here needs the qt6-multimedia package"
-                    : "No preview for this kind of file")))
+                    : "No preview for this kind of file")))))
               color: Util.alpha(Color.popups.text, 0.55)
               font.family: Style.font.family
               font.pixelSize: Style.font.body

@@ -15,32 +15,45 @@ Item {
   property real volume: 1
   property bool muted: false
   property bool pendingPlay: false
+  property int cleanId: 0
+  property string cleanError: ""
+  property var tags: ({})
+  readonly property bool preparing: cleanId !== 0
   signal volumeMoved(real value)
   signal muteToggled()
 
   property alias player: player
   readonly property bool playing: player.playbackState === MediaPlayer.PlayingState
-  readonly property bool failed: player.error !== MediaPlayer.NoError
+  readonly property bool failed: cleanError !== "" || player.error !== MediaPlayer.NoError
     || player.mediaStatus === MediaPlayer.InvalidMedia
   readonly property real shownPosition: seek.dragging ? seek.liveValue : player.position
-  readonly property string title: metaText(MediaMetaData.Title)
-  readonly property string artist: metaText(MediaMetaData.ContributingArtist) || metaText(MediaMetaData.AlbumArtist)
-  readonly property string album: metaText(MediaMetaData.AlbumTitle)
+  readonly property string title: String(tags.title || "")
+  readonly property string artist: String(tags.artist || "")
+  readonly property string album: String(tags.album || "")
   readonly property bool coverArt: thumbnails && !!entry && !!service && !!service.thumbExts
     && entry.size > 0 && service.thumbExts[entry.ext] === true
 
-  function metaText(key) {
-    var data = player.metaData
-    if (!data) return ""
-    return String(data.stringValue(key) || "").trim()
-  }
-
   function load() {
-    var url = entry ? Util.fileUrl(entry.path) : ""
-    if (url === String(player.source)) return
-    pendingPlay = url !== ""
+    if (cleanId && service) service.cancel(cleanId)
+    cleanId = 0
+    cleanError = ""
+    tags = ({})
     player.stop()
-    player.source = url
+    player.source = ""
+    pendingPlay = false
+    if (!entry || !service) return
+    var wanted = entry.path
+    cleanId = service.previewAudio(wanted, function (m) {
+      if (!audio.entry || audio.entry.path !== wanted) return
+      audio.cleanId = 0
+      audio.tags = { title: String(m.title || "").trim(), artist: String(m.artist || "").trim(), album: String(m.album || "").trim() }
+      audio.pendingPlay = true
+      player.source = Util.fileUrl(String(m.path || ""))
+    }, function (m) {
+      if (!audio.entry || audio.entry.path !== wanted) return
+      audio.cleanId = 0
+      audio.cleanError = m && m.code === "EUNSUPPORTED" ? "playing audio here needs ffmpeg" : String((m && m.message) || "could not read it")
+    })
   }
 
   function togglePlay() {
@@ -57,7 +70,10 @@ Item {
   }
 
   onEntryChanged: load()
-  Component.onDestruction: player.stop()
+  Component.onDestruction: {
+    if (cleanId && service) service.cancel(cleanId)
+    player.stop()
+  }
 
   MediaPlayer {
     id: player
@@ -259,7 +275,8 @@ Item {
         anchors.centerIn: parent
         width: parent.width
         visible: audio.failed
-        text: "Can't play this file" + (player.errorString !== "" ? ": " + player.errorString : "")
+        text: "Can't play this file" + (audio.cleanError !== "" ? ": " + audio.cleanError
+          : (player.errorString !== "" ? ": " + player.errorString : ""))
         color: Util.alpha(Color.popups.text, 0.6)
         font.family: Style.font.family
         font.pixelSize: Style.font.body
@@ -273,7 +290,7 @@ Item {
       textFormat: Text.PlainText
       width: parent.width
       visible: !audio.failed
-      text: "K play or pause     Shift+Arrows skip 5 seconds     M mute"
+      text: audio.preparing ? "Getting the audio ready" : "K play or pause     Shift+Arrows skip 5 seconds     M mute"
       color: Util.alpha(Color.popups.text, 0.4)
       font.family: Style.font.family
       font.pixelSize: Style.font.caption

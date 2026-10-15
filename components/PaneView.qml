@@ -674,15 +674,6 @@ Item {
     return text.substring(0, 14) + "\u2026" + text.substring(text.length - 10)
   }
 
-  function previewable(entry) {
-    if (!pane.thumbnails || pane.picking) return false
-    if (entry.isDir || entry.isBroken) return false
-    if (entry.size <= 0 || entry.size > 24000000) return false
-    var e = entry.ext
-    return e === "png" || e === "jpg" || e === "jpeg" || e === "gif"
-      || e === "webp" || e === "bmp" || e === "svg" || e === "ico" || e === "avif"
-  }
-
   function middleOpen(entry) {
     if (!entry) return
     if (entry.isDir && !entry.isBroken) pane.newTabRequested(entry.path)
@@ -1168,7 +1159,6 @@ Item {
                     anchors.fill: parent
                     service: pane.service
                     entry: row.entry
-                    direct: pane.previewable(row.entry)
                     generated: pane.thumbable(row.entry)
                     requestSize: pane.listIconSize * 2
                     sourceSize.width: Style.space(36)
@@ -1363,7 +1353,6 @@ Item {
                 active: pane.compactView
                 service: pane.service
                 entry: cell.entry
-                direct: pane.previewable(cell.entry)
                 generated: pane.thumbable(cell.entry)
                 requestSize: pane.listIconSize * 2
                 sourceSize.width: Style.space(36)
@@ -1428,7 +1417,6 @@ Item {
                 active: !pane.compactView
                 service: pane.service
                 entry: cell.entry
-                direct: pane.previewable(cell.entry)
                 generated: pane.thumbable(cell.entry)
                 requestSize: pane.gridIconSize * 2
                 sourceSize.width: pane.galleryView ? Math.round(Style.space(360) * pane.viewScale) : pane.gridIconSize * 2

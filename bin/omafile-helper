@@ -1987,6 +1987,145 @@ def op_peek(req):
           "truncated": truncated, "size": len(data)})
     send_done(req_id)
 
+AUDIO_PREVIEW_LIMIT = 1 << 30
+AUDIO_PREVIEW_TIMEOUT = 90.0
+AUDIO_TAG_LIMIT = 256
+AUDIO_TAGS = ("title", "artist", "album_artist", "album")
+
+
+def audio_preview_dir():
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache")
+    folder = os.path.join(base, "omafile", "preview")
+    private_makedirs(folder)
+    return folder
+
+
+def prune_audio_previews(folder, keep):
+    try:
+        names = [n for n in os.listdir(folder) if n.startswith("preview-") and n.endswith(".mka")]
+    except OSError:
+        return
+    names.sort(key=lambda n: os.lstat(os.path.join(folder, n)).st_mtime if os.path.lexists(os.path.join(folder, n)) else 0)
+    for name in names[:max(0, len(names) - keep)]:
+        try:
+            os.unlink(os.path.join(folder, name))
+        except OSError:
+            pass
+
+
+def run_media(argv, pass_fds, cancel_event, timeout, limit=65536):
+    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                            env=trusted_env(), close_fds=True, pass_fds=tuple(pass_fds), start_new_session=True)
+    try:
+        os.setpriority(os.PRIO_PROCESS, proc.pid, 10)
+    except OSError:
+        pass
+    out = bytearray()
+    deadline = time.monotonic() + timeout
+    stream = proc.stdout.fileno()
+    open_stream = True
+    try:
+        while True:
+            if cancel_event.is_set() or time.monotonic() > deadline:
+                kill_process_group(proc)
+                proc.wait()
+                return None, b""
+            if open_stream:
+                ready, _, _ = select.select([stream], [], [], 0.2)
+                if ready:
+                    chunk = os.read(stream, 65536)
+                    if not chunk:
+                        open_stream = False
+                    elif len(out) < limit:
+                        out.extend(chunk[:limit - len(out)])
+                continue
+            try:
+                return proc.wait(timeout=0.2), bytes(out)
+            except subprocess.TimeoutExpired:
+                continue
+    finally:
+        proc.stdout.close()
+
+
+def audio_tags(probe, fd, cancel_event):
+    code, out = run_media([probe, "-v", "error", "-show_entries",
+                           "format_tags=" + ",".join(AUDIO_TAGS), "-of", "json", "/proc/self/fd/%d" % fd],
+                          (fd,), cancel_event, 15.0)
+    tags = {}
+    if code != 0:
+        return tags
+    try:
+        found = json.loads(out.decode("utf-8", "replace")).get("format", {}).get("tags", {})
+    except (ValueError, AttributeError):
+        return tags
+    if not isinstance(found, dict):
+        return tags
+    for key, value in found.items():
+        name = str(key).lower()
+        if name in AUDIO_TAGS and isinstance(value, str):
+            tags[name] = value[:AUDIO_TAG_LIMIT]
+    return tags
+
+
+def op_audiopreview(req, cancel_event):
+    req_id = req["id"]
+    path = req.get("path")
+    if not isinstance(path, str) or not path.startswith("/"):
+        send_error(req_id, "EINVAL", "absolute path required")
+        return
+    try:
+        ffmpeg = trusted_program("ffmpeg")
+        probe = trusted_program("ffprobe")
+    except FileNotFoundError:
+        send_error(req_id, "EUNSUPPORTED", "ffmpeg is not installed", path)
+        return
+    try:
+        fd = os.open(to_bytes(path), os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError as e:
+        send_error(req_id, errno_code(e), e.strerror or str(e), path)
+        return
+    out = None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            send_error(req_id, "EINVAL", "not a regular file", path)
+            return
+        if st.st_size > AUDIO_PREVIEW_LIMIT:
+            send_error(req_id, "EFBIG", "too large to preview", path)
+            return
+        os.set_blocking(fd, True)
+        folder = audio_preview_dir()
+        prune_audio_previews(folder, 1)
+        out = os.path.join(folder, "preview-%s.mka" % os.urandom(8).hex())
+        tags = audio_tags(probe, fd, cancel_event)
+        os.lseek(fd, 0, os.SEEK_SET)
+        code, _ = run_media([ffmpeg, "-nostdin", "-v", "error", "-i", "/proc/self/fd/%d" % fd,
+                             "-map", "0:a:0", "-c", "copy", "-map_metadata", "-1",
+                             "-map_metadata:s:a:0", "-1", "-map_chapters", "-1",
+                             "-fs", str(AUDIO_PREVIEW_LIMIT), "-f", "matroska", "-n", out],
+                            (fd,), cancel_event, AUDIO_PREVIEW_TIMEOUT)
+        if code is None:
+            send_error(req_id, "ECANCELED" if cancel_event.is_set() else "ETIMEDOUT", "stopped", path)
+            return
+        if code != 0 or not os.path.isfile(out):
+            send_error(req_id, "EFAIL", "could not read the audio in this file", path)
+            return
+        os.chmod(out, 0o600)
+        result = out
+        out = None
+        send_done(req_id, path=result, title=tags.get("title", ""),
+                  artist=tags.get("artist", "") or tags.get("album_artist", ""), album=tags.get("album", ""))
+    except OSError as e:
+        send_error(req_id, errno_code(e), e.strerror or str(e), path)
+    finally:
+        os.close(fd)
+        if out is not None:
+            try:
+                os.unlink(out)
+            except OSError:
+                pass
+
+
 THUMB_BUCKETS = (("normal", 128), ("large", 256), ("x-large", 512), ("xx-large", 1024))
 THUMB_BUCKET_SIZES = dict(THUMB_BUCKETS)
 THUMB_URI_SAFE = "/!$&'()*+,;=:@"
@@ -1998,6 +2137,9 @@ THUMB_LOCKS = {}
 THUMB_TABLES_LOCK = threading.Lock()
 THUMB_TABLES = None
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+PIXEL_CHUNKS = frozenset([b"IHDR", b"PLTE", b"tRNS", b"IDAT", b"IEND", b"gAMA", b"sRGB", b"cHRM", b"sBIT"])
+THUMB_TEXT_LIMIT = 16384
+THUMB_MAX_SIDE = max(size for _, size in THUMB_BUCKETS)
 
 def thumb_root():
     base = os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache")
@@ -2177,14 +2319,25 @@ def png_text(chunks):
             out[key.decode("latin-1")] = value.decode("latin-1")
     return out
 
-def png_with_text(chunks, fields):
-    kept = []
+def png_size(chunks):
+    if not chunks or chunks[0][0] != b"IHDR" or len(chunks[0][1]) != 13:
+        return None
+    return struct.unpack(">II", chunks[0][1][:8])
+
+def safe_thumb(chunks, max_side=THUMB_MAX_SIDE):
+    size = png_size(chunks)
+    if size is None or not (0 < size[0] <= max_side and 0 < size[1] <= max_side):
+        return False
+    text = 0
     for kind, body in chunks:
-        if kind == b"tEXt" and b"\0" in body:
-            key = body.split(b"\0", 1)[0].decode("latin-1")
-            if key in fields:
-                continue
-        kept.append((kind, body))
+        if kind == b"tEXt":
+            text += len(body)
+        elif kind not in PIXEL_CHUNKS:
+            return False
+    return text <= THUMB_TEXT_LIMIT
+
+def png_with_text(chunks, fields):
+    kept = [(kind, body) for kind, body in chunks if kind in PIXEL_CHUNKS]
     text = [(b"tEXt", k.encode("latin-1") + b"\0" + v.encode("latin-1", errors="replace"))
             for k, v in fields.items()]
     ordered = kept[:1] + text + kept[1:]
@@ -2203,7 +2356,7 @@ def thumb_matches(path, uri, mtime):
             chunks = png_chunks(f.read())
     except OSError:
         return False
-    if not chunks:
+    if not chunks or not safe_thumb(chunks):
         return False
     meta = png_text(chunks)
     if meta.get("Thumb::URI") != uri:
@@ -2325,7 +2478,7 @@ def generate_thumb(root, name, src, uri, st, bucket, command, mime, cancel_event
                 chunks = png_chunks(f.read(THUMB_MAX_READ))
         except OSError:
             chunks = None
-        if not chunks:
+        if not chunks or png_size(chunks) is None or max(png_size(chunks)) > THUMB_MAX_SIDE:
             return "failed"
         fields = {"Thumb::URI": uri, "Thumb::MTime": str(int(st.st_mtime)),
                   "Thumb::Size": str(st.st_size), "Thumb::Mimetype": mime,
@@ -4060,6 +4213,7 @@ CANCELLABLE_OPS = {
     "setdefaultfm": op_setdefaultfm,
     "unmounturi": op_unmounturi,
     "thumb": op_thumb,
+    "audiopreview": op_audiopreview,
     "counts": op_counts,
     "extract": op_extract,
     "compress": op_compress,

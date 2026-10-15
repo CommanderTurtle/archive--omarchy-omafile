@@ -169,6 +169,12 @@ QtObject {
   function readSystemClipboard(onDone) { onDone(systemClipboard) }
   property string clipboardText: ""
   property var remoteRoots: []
+  property var audioTags: ({ title: "Tone" })
+  function previewAudio(path, onReady, onError) {
+    record("previewAudio", [path])
+    Qt.callLater(function () { onReady({ path: path, title: mock.audioTags.title || "", artist: "", album: "" }) })
+    return 9
+  }
   function isRemotePath(p) { return remoteRoots.some(function (r) { return Model.isWithin(p, r) }) }
   function resolveConflict(id, action, all, seq) { record("resolveConflict", [id, action, all, seq]) }
   function transferOwner(id) { return null }

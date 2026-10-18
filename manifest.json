@@ -39,6 +39,7 @@
       "viewScale": 1,
       "terminal": "",
       "editor": "",
+      "agent": "",
       "showTransferBadge": true,
       "glyph": "",
       "showDrives": true,
@@ -138,6 +139,12 @@
         "key": "editor",
         "type": "string",
         "label": "Editor command (empty for Omarchy default)",
+        "defaultValue": ""
+      },
+      {
+        "key": "agent",
+        "type": "string",
+        "label": "Agent command run in a terminal (empty for Claude Code)",
         "defaultValue": ""
       },
       {

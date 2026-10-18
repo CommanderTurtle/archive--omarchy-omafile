@@ -769,6 +769,17 @@ function tokenizeCommand(text) {
   return out;
 }
 
+var envAssignment = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+function commandName(text) {
+  var words = tokenizeCommand(text);
+  for (var i = 0; i < words.length; i++) {
+    if (envAssignment.test(words[i])) continue;
+    return basename(words[i]);
+  }
+  return '';
+}
+
 var globLimit = 64;
 var globCache = {};
 var globCacheSize = 0;

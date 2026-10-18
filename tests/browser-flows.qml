@@ -1219,6 +1219,34 @@ ShellRoot {
         compare(browser.sidebarVisible, shown)
       }
 
+      function test_9ca_editorAndAgentItems() {
+        waitRows()
+        var file = { name: "notes.txt", path: "/tmp/notes.txt", isDir: false, ext: "txt" }
+        var folder = { name: "docs", path: "/tmp/docs", isDir: true, ext: "" }
+        var fileLabels = menuLabels(browser.contextActions(file))
+        compare(fileLabels[fileLabels.indexOf("Open with") + 1], "Open in editor")
+        verify(menuLabels(browser.contextActions(folder)).indexOf("Open in editor") >= 0)
+        verify(menuLabels(browser.contextActions(null)).indexOf("Open in editor") < 0)
+        mock.calls = []
+        browser.menuEntry = file
+        browser.runAction("editor")
+        compare(mock.called("openEditor").args[0], "/tmp/notes.txt")
+
+        verify(menuLabels(browser.contextActions(folder)).indexOf("Open Claude Code here") < 0, "no agent item without an agent")
+        mock.agentAvailable = true
+        verify(menuLabels(browser.contextActions(folder)).indexOf("Open Claude Code here") >= 0)
+        verify(menuLabels(browser.contextActions(null)).indexOf("Open Claude Code here") >= 0)
+        verify(menuLabels(browser.contextActions(file)).indexOf("Open Claude Code here") < 0, "files get no agent item")
+        mock.agentName = "omp"
+        verify(menuLabels(browser.contextActions(folder)).indexOf("Open omp here") >= 0)
+        mock.calls = []
+        browser.menuEntry = folder
+        browser.runAction("agent")
+        compare(mock.called("openAgent").args[0], "/tmp/docs")
+        mock.agentAvailable = false
+        mock.agentName = "Claude Code"
+      }
+
       function test_9d_pasteFromSystemClipboard() {
         pane().navigate("/tmp")
         waitRows()
@@ -1551,6 +1579,7 @@ ShellRoot {
         compare(browser.dialogMode, "", "properties is off")
         var keys = browser.contextActions(pane().cursorEntry()).map(function (a) { return a.key })
         verify(keys.indexOf("trash") < 0 && keys.indexOf("delete") < 0 && keys.indexOf("paste") < 0 && keys.indexOf("properties") < 0)
+        verify(keys.indexOf("editor") < 0, "no editor while picking")
         verify(keys.indexOf("open") >= 0 && keys.indexOf("copy") >= 0)
         browser.acceptPick([Model.decodeEntry(["link.txt", "l", 1, 0, 0, "/etc/passwd"], "/tmp")])
         compare(mock.called("finishPick"), null, "a linked file is not handed to the app")

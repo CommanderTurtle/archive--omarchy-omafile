@@ -1238,9 +1238,9 @@ Item {
     else Quickshell.execDetached(["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--dir=" + path])
   }
 
-  function openClaude(path) {
+  function openAgent(path) {
     Quickshell.execDetached(["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--dir=" + path,
-      "bash", "-c", "claude; exec bash"])
+      "bash", "-c", (agentCommand || "claude") + "; exec bash"])
   }
 
   function openEditor(path) {
@@ -1680,6 +1680,9 @@ Item {
   }
 
   property bool claudeAvailable: false
+  readonly property string agentCommand: String(settingNow("agent", "") || "").trim()
+  readonly property string agentName: agentCommand ? (Model.commandName(agentCommand) || agentCommand) : "Claude Code"
+  readonly property bool agentAvailable: agentCommand !== "" || claudeAvailable
 
   property Process claudeCheck: Process {
     command: ["sh", "-c", "command -v claude"]

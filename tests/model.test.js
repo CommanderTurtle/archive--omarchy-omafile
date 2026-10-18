@@ -454,6 +454,18 @@ test('tokenizeCommand returns nothing for blank input', function () {
   assert.deepEqual(tokens(undefined), []);
 });
 
+test('commandName names the program a command runs', function () {
+  assert.equal(Model.commandName('omp'), 'omp');
+  assert.equal(Model.commandName('codex --full-auto'), 'codex');
+  assert.equal(Model.commandName('~/bin/omp --resume'), 'omp');
+  assert.equal(Model.commandName('"/opt/my agent/run"'), 'run');
+  assert.equal(Model.commandName('FOO=1 BAR=2 omp'), 'omp');
+  assert.equal(Model.commandName('FOO=1'), '');
+  assert.equal(Model.commandName('   '), '');
+  assert.equal(Model.commandName(null), '');
+  assert.equal(Model.commandName('omp "unterminated'), '');
+});
+
 test('glob patterns match file names case-insensitively', function () {
   assert.equal(Model.matchesPatterns('photo.PNG', ['*.png']), true);
   assert.equal(Model.matchesPatterns('photo.jpg', ['*.png', '*.gif']), false);

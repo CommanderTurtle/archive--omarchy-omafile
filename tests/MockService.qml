@@ -147,6 +147,10 @@ QtObject {
   function setDefaultApp(path, desktopId) { record("setDefaultApp", [path, desktopId]) }
   function runCommandOn(text, path) { record("runCommandOn", [text, path]); return true }
   function openExternally(path) { record("openExternally", [path]) }
+  property bool agentAvailable: false
+  property string agentName: "Claude Code"
+  function openEditor(path) { record("openEditor", [path]) }
+  function openAgent(path) { record("openAgent", [path]) }
   property var compressResult: null
   function makeDirectory(path, onDone, onError) { record("makeDirectory", [path]); if (onDone) onDone({}) }
   function compressPaths(paths, name, onDone, onError) {

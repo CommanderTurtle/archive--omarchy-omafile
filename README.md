@@ -139,9 +139,13 @@ Connect to a server mounts an SMB share, an SFTP host, FTP or WebDAV. Servers yo
 
 This uses GVFS and needs no root. Install `gvfs-smb` for Windows shares if it is missing.
 
-### Terminal
+### Terminal, editor and agent
 
 Right click a folder, or empty space for the folder you are in, and choose Open in terminal, or press Ctrl+.. With [Claude Code](https://claude.com/claude-code) installed, Open Claude Code here starts it in that folder and leaves a shell open when it exits.
+
+Set another agent under Settings, Commands, Agent, such as `omp` or `codex --full-auto`. The item is then named after it, Open omp here, and shows whether or not Claude Code is installed.
+
+Open in editor, right under Open with, opens a file or folder in the Editor command from Settings, Commands, or in your Omarchy default editor when that is empty. Set it to `zeditor` or `code` to open folders as projects.
 
 ### Settings
 
@@ -341,7 +345,8 @@ Configure these keys through the Omarchy bar widget settings:
 | `rememberFolderViews` | Open each folder in the view last picked there, and other folders in `defaultView` |
 | `extractOnOpen` | Double click and Enter extract archives instead of opening them. Off by default |
 | `terminal` | Terminal command to open in the current directory |
-| `editor` | Text editor command to open selected files |
+| `editor` | Editor command for Open in editor. Empty for your Omarchy default editor |
+| `agent` | Command Open ... here runs in a terminal. Empty for Claude Code |
 | `showTransferBadge` | Show a progress ring on the bar icon while a transfer runs |
 | `showDrives` | Show the Drives section in the sidebar |
 | `thumbnails` | Show image previews and thumbnails |

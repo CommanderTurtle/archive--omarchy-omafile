@@ -373,8 +373,8 @@ Item {
   property int pickFilter: -1
   readonly property var pickBlockedActions: ({
     cut: true, paste: true, rename: true, trash: true, delete: true, restore: true, emptytrash: true,
-    extract: true, compress: true, properties: true, newfile: true, terminal: true, claude: true,
-    openwith: true, undo: true, redo: true, drop: true, transfer: true,
+    extract: true, compress: true, properties: true, newfile: true, terminal: true, agent: true,
+    openwith: true, editor: true, undo: true, redo: true, drop: true, transfer: true,
     "place:emptytrash": true, "place:properties": true
   })
 
@@ -1065,10 +1065,12 @@ Item {
     var items = []
     var sep = 0
     function separator() { items.push({ key: "sep" + (++sep), label: "", glyph: "" }) }
-    var claude = service && service.claudeAvailable
+    var agent = service && service.agentAvailable
+    var agentLabel = agent ? "Open " + service.agentName + " here" : ""
     if (hasEntry) {
       items.push({ key: "open", label: "Open", glyph: Icons.actionGlyph("open"), hint: "Enter" })
       items.push({ key: "openwith", label: "Open with", glyph: Icons.actionGlyph("open") })
+      items.push({ key: "editor", label: "Open in editor", glyph: Icons.actionGlyph("editor") })
       if (entry.isDir)
         items.push({ key: "opentab", label: "Open in new tab", glyph: Icons.actionGlyph("add"), hint: "Ctrl+Enter" })
       else
@@ -1095,8 +1097,8 @@ Item {
         })
         separator()
         items.push({ key: "terminal", label: "Open in terminal", glyph: Icons.actionGlyph("terminal") })
-        if (claude)
-          items.push({ key: "claude", label: "Open Claude Code here", glyph: Icons.actionGlyph("terminal") })
+        if (agent)
+          items.push({ key: "agent", label: agentLabel, glyph: Icons.actionGlyph("terminal") })
       }
       separator()
       if (trashed)
@@ -1112,8 +1114,8 @@ Item {
       items.push({ key: "paste", label: "Paste", glyph: Icons.actionGlyph("paste"), hint: "Ctrl+V", disabled: !service })
       separator()
       items.push({ key: "terminal", label: "Open in terminal", glyph: Icons.actionGlyph("terminal"), hint: "Ctrl+." })
-      if (claude)
-        items.push({ key: "claude", label: "Open Claude Code here", glyph: Icons.actionGlyph("terminal") })
+      if (agent)
+        items.push({ key: "agent", label: agentLabel, glyph: Icons.actionGlyph("terminal") })
       separator()
       items.push({
         key: "bookmark",
@@ -1346,6 +1348,7 @@ Item {
     else if (key === "preview") showPreview(entry)
     else if (key === "open") p.openEntry(entry)
     else if (key === "openwith") showDialog("openwith", "Open " + (entry ? entry.name : "") + " with", "", entry)
+    else if (key === "editor") { service.openEditor(entry ? entry.path : p.path); afterLaunch() }
     else if (key === "opentab") newTab(activeSide, entry.path)
     else if (key === "copy") doCopy()
     else if (key === "cut") doCut()
@@ -1363,7 +1366,7 @@ Item {
     else if (key === "newfile") showDialog("newfile", "New file", "untitled", null)
     else if (key === "bookmark") service.togglePinned(entry && entry.isDir ? entry.path : p.path)
     else if (key === "terminal") service.openTerminal(entry && entry.isDir ? entry.path : p.path)
-    else if (key === "claude") service.openClaude(entry && entry.isDir ? entry.path : p.path)
+    else if (key === "agent") service.openAgent(entry && entry.isDir ? entry.path : p.path)
     else if (key === "refresh") p.refresh()
     else if (key === "togglehidden") { p.showHidden = !p.showHidden; rememberSession() }
     else if (key === "settings") showDialog("settings", "Settings", "", null)
@@ -3642,10 +3645,22 @@ Item {
                     onAccepted: root.applySettingNow("editor", text)
                   }
 
+                  PanelSectionHeader {
+                    width: parent.width
+                    text: "Agent"
+                  }
+
+                  EditField {
+                    width: parent.width
+                    text: root.textSetting("agent", "")
+                    placeholderText: "Claude Code"
+                    onAccepted: root.applySettingNow("agent", text)
+                  }
+
                   Text {
                     textFormat: Text.PlainText
                     width: parent.width
-                    text: "For example alacritty -e nvim. Press Enter to save."
+                    text: "For example alacritty -e nvim, zeditor or omp. Press Enter to save."
                     color: Util.alpha(Color.popups.text, 0.5)
                     font.family: Style.font.family
                     font.pixelSize: Style.font.caption

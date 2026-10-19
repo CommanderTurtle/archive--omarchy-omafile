@@ -124,6 +124,9 @@ Item {
   property bool connectAnonymous: false
   property string connectStatus: ""
   property bool connectFailed: false
+  property string unlockStatus: ""
+  property bool unlockFailed: false
+  property bool unlockBusy: false
   function startPath() {
     return service ? service.startPath() : (home || "/")
   }
@@ -575,6 +578,7 @@ Item {
     completePick(pick.multiple ? files : [files[0]])
   }
   function showDialog(mode, title, value, payload) {
+    if (dialogMode === "unlock") forgetUnlock()
     dialogMode = mode
     dialogTitle = title
     dialogValue = value || ""
@@ -607,11 +611,25 @@ Item {
         root.connectAnonymous = saved ? saved.anonymous === true : false
         if (root.connectFailed && !root.connectAnonymous) passwordField.forceActiveFocus()
         else serverField.forceActiveFocus()
+      } else if (dialogMode === "unlock") {
+        root.forgetPassphrase()
+        unlockField.forceActiveFocus()
       }
     })
   }
+  function forgetPassphrase() {
+    unlockField.text = ""
+    unlockField.editUndo = []
+    unlockField.editRedo = []
+  }
+  function forgetUnlock() {
+    forgetPassphrase()
+    unlockStatus = ""
+    unlockFailed = false
+  }
   function closeDialog() {
     if (dialogMode === "properties") stopUsageScan()
+    if (dialogMode === "unlock") forgetUnlock()
     dialogMode = ""
     dialogPayload = null
     dialogError = ""
@@ -644,9 +662,14 @@ Item {
       },
       function (m) {
         root.quickConnecting = ""
+        var message = String(m.message || "Could not connect")
+        if (root.dialogMode !== "") {
+          root.statusText = "Could not connect to " + label + ": " + message
+          return
+        }
         root.statusText = ""
         root.showDialog("connect", "Connect to " + label, address,
-          { error: String(m.message || "Could not connect") + ". Check the details and try again." })
+          { error: message + ". Check the details and try again." })
       })
   }
   function submitConnect() {
@@ -1169,7 +1192,10 @@ Item {
     if (row.header === true) return sectionMenuActions(row)
     var real = row.path && row.path !== "recent:"
     if (row.unmounted === true) {
-      items.push({ key: "place:mount", label: "Mount", glyph: Icons.placeGlyph(row.key) })
+      if (row.locked === true)
+        items.push({ key: "place:unlock", label: "Unlock…", glyph: Icons.actionGlyph("lock") })
+      else
+        items.push({ key: "place:mount", label: "Mount", glyph: Icons.placeGlyph(row.key) })
       items.push({ key: "sep-place1", label: "", glyph: "" })
       items.push({ key: "place:hidedrive", label: "Hide", glyph: Icons.actionGlyph("hidden") })
       return withPlaceOrderActions(items, row)
@@ -1246,6 +1272,7 @@ Item {
     }
     else if (action === "disconnect") service.disconnectServer(path, null, null)
     else if (action === "mount") mountDriveAndOpen(String(row.device || ""))
+    else if (action === "unlock") askUnlock(row)
     else if (action === "unmount") unmountDriveRow(row, false)
     else if (action === "eject") unmountDriveRow(row, true)
     else if (action === "hidedrive") service.toggleHiddenDrive(String(row.hideKey || ""))
@@ -1276,18 +1303,57 @@ Item {
       root.driveNotice("Could not mount " + device, m)
     })
   }
+  function askUnlock(row) {
+    if (!service || !row || !row.device) return
+    unlockStatus = ""
+    unlockFailed = false
+    unlockBusy = false
+    showDialog("unlock", "Unlock " + String(row.label || row.device), "", row)
+  }
+  function submitUnlock() {
+    var row = dialogPayload
+    if (!service || !row || unlockBusy) return
+    var passphrase = String(unlockField.text || "")
+    if (!passphrase) {
+      unlockStatus = "Enter the passphrase"
+      unlockFailed = true
+      return
+    }
+    var label = String(row.label || row.device)
+    unlockBusy = true
+    unlockStatus = "Unlocking"
+    unlockFailed = false
+    service.unlockDrive(String(row.device), passphrase, function (m) {
+      root.unlockBusy = false
+      if (root.dialogMode === "unlock" && root.dialogPayload === row) root.closeDialog()
+      var target = String(m.path || "")
+      if (target) root.activePane().navigate(target)
+      else root.driveNotice("Unlocked " + label + ", but could not mount it", m)
+    }, function (m) {
+      root.unlockBusy = false
+      var wrong = m.code === "EPASSPHRASE"
+      var message = wrong ? "Wrong passphrase. Try again." : String(m.message || "Could not unlock")
+      if (root.dialogMode !== "unlock" || root.dialogPayload !== row) {
+        root.statusText = "Could not unlock " + label + ": " + message
+        return
+      }
+      if (wrong) root.forgetPassphrase()
+      root.unlockStatus = message
+      root.unlockFailed = true
+      unlockField.forceActiveFocus()
+    })
+  }
   function unmountDriveRow(row, powerOff) {
     if (!service || row.unmountable !== true) return
     var mount = String(row.path)
     var p = activePane()
     if (p && (p.path === mount || p.path.indexOf(mount + "/") === 0)) p.navigate(home)
-    if (powerOff === true) {
-      service.ejectDrive(row.device)
-      return
+    var failed = function (m) {
+      if (m && m.code === "ELOCK") root.driveNotice("Unmounted " + mount + ", but could not lock it", m)
+      else root.driveNotice((powerOff === true ? "Could not eject " : "Could not unmount ") + mount, m)
     }
-    service.unmountDrive(row.device, null, function (m) {
-      root.driveNotice("Could not unmount " + mount, m)
-    })
+    if (powerOff === true) service.ejectDrive(row.device, null, failed)
+    else service.unmountDrive(row.device, null, failed)
   }
   function bookmarkFolders(paths) {
     service.statPaths(paths, function (items) {
@@ -2297,6 +2363,7 @@ Item {
           onDropRequested: function (urls, dest, position) { root.handleDrop(urls, dest, position) }
           onHideDrive: function (key) { root.service.toggleHiddenDrive(key) }
           onMountDrive: function (device) { root.mountDriveAndOpen(device) }
+          onUnlockDrive: function (row) { root.askUnlock(row) }
           onPlaceMenuRequested: function (row, x, y) { root.openPlaceMenu(row, x, y) }
           onBookmarkDropped: function (paths) { root.bookmarkFolders(paths) }
           onShowAllDrives: root.showDialog("settings", "Settings", "", null)
@@ -3838,6 +3905,44 @@ Item {
             }
           }
 
+          Column {
+            width: parent.width
+            visible: root.dialogMode === "unlock"
+            spacing: Style.space(8)
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              text: "Enter the passphrase for this encrypted drive. It is not stored."
+              color: Util.alpha(Color.popups.text, 0.6)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.Wrap
+            }
+
+            EditField {
+              id: unlockField
+              objectName: "unlockField"
+              width: parent.width
+              placeholderText: "Passphrase"
+              password: true
+              onAccepted: root.submitUnlock()
+              Keys.onEscapePressed: root.closeDialog()
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              objectName: "unlockStatus"
+              width: parent.width
+              visible: root.unlockStatus !== ""
+              text: root.unlockStatus
+              color: root.unlockFailed ? Color.urgent : Util.alpha(Color.popups.text, 0.7)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.Wrap
+            }
+          }
+
           Flickable {
             id: propsFlick
             objectName: "propsFlick"
@@ -3922,17 +4027,20 @@ Item {
 
             Button {
               objectName: "dialogConfirmButton"
-              enabled: root.dialogMode !== "openwith" || root.appChoiceReady
+              enabled: (root.dialogMode !== "openwith" || root.appChoiceReady)
+                && (root.dialogMode !== "unlock" || !root.unlockBusy)
               opacity: enabled ? 1 : 0.4
               text: root.isReadOnlyDialog() ? "Close"
                 : (root.dialogMode === "connect" ? "Connect"
-                  : (root.dialogMode === "openwith" ? "Open"
-                    : (root.dialogMode === "compress" ? "Compress" : "Confirm")))
+                  : (root.dialogMode === "unlock" ? "Unlock"
+                    : (root.dialogMode === "openwith" ? "Open"
+                      : (root.dialogMode === "compress" ? "Compress" : "Confirm"))))
               bordered: true
               onClicked: {
                 if (root.isReadOnlyDialog()) root.closeDialog()
                 else if (root.dialogMode === "openwith") root.chooseApp()
                 else if (root.dialogMode === "connect") root.submitConnect()
+                else if (root.dialogMode === "unlock") root.submitUnlock()
                 else root.submitDialog()
               }
             }

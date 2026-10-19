@@ -2689,8 +2689,9 @@ def op_freespace(req):
 
 def run_tool(argv):
     try:
-        proc = subprocess.run(argv, shell=False, capture_output=True, timeout=5)
-    except (FileNotFoundError, OSError):
+        proc = subprocess.run([trusted_program(argv[0])] + list(argv[1:]), shell=False,
+                              stdin=subprocess.DEVNULL, capture_output=True, timeout=5, env=trusted_env())
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0:
         return None
@@ -3474,8 +3475,58 @@ def mountable_device(dev):
     return str(dev.get("path") or "").startswith("/dev/")
 
 
+def locked_container(dev):
+    if dev.get("fstype") != "crypto_LUKS" or dev.get("children"):
+        return False
+    if str(dev.get("parttype") or "").lower() in HIDDEN_PARTTYPES:
+        return False
+    return str(dev.get("path") or "").startswith("/dev/")
+
+
+def crypto_container(blockdevices, device):
+    target = os.path.realpath(device)
+    for dev in flatten_lsblk(blockdevices):
+        if dev.get("fstype") != "crypto_LUKS":
+            continue
+        for child in dev.get("children") or []:
+            path = str(child.get("path") or "")
+            if path and (path == device or os.path.realpath(path) == target):
+                return str(dev.get("path") or "")
+    return ""
+
+
+UNLOCKED_AS = re.compile(
+    r"^Unlocked (/dev/\S+) as (/dev/\S+?)\.?$|Device (/dev/\S+) is already unlocked as (/dev/\S+?)\.?$", re.M)
+WRONG_PASSPHRASE = ("incorrect passphrase", "no key available")
+
+
+def unlocked_device(text, device):
+    target = os.path.realpath(device)
+    for match in UNLOCKED_AS.finditer(str(text or "")):
+        source = match.group(1) or match.group(3)
+        if source == device or os.path.realpath(source) == target:
+            return match.group(2) or match.group(4)
+    return ""
+
+
+def udisks_message(text, fallback):
+    message = str(text or "").strip()
+    match = re.search(r"GDBus\.Error:[\w.]+: (.+)", message, re.S)
+    if match:
+        message = match.group(1).strip()
+    return message or fallback
+
+
 def valid_block_device(value):
     return isinstance(value, str) and value.startswith("/dev/") and ".." not in value
+
+
+def udisks_mount(device):
+    proc = run_trusted("udisksctl", ["mount", "-b", device], timeout=90)
+    out = (proc.stdout or "").strip()
+    if proc.returncode != 0:
+        return None, (proc.stderr or out or "could not mount").strip()
+    return (out.split(" at ", 1)[1].strip().rstrip(".") if " at " in out else ""), ""
 
 
 def op_mountdev(req, cancel_event):
@@ -3485,39 +3536,85 @@ def op_mountdev(req, cancel_event):
         send_error(req_id, "EINVAL", "block device required")
         return
     try:
-        proc = run_trusted("udisksctl", ["mount", "-b", device], timeout=90)
+        path, message = udisks_mount(device)
     except FileNotFoundError:
         send_error(req_id, "EUNSUPPORTED", "udisksctl is not installed")
         return
     except subprocess.TimeoutExpired:
         send_error(req_id, "ETIMEDOUT", "mount timed out")
         return
-    out = (proc.stdout or "").strip()
-    if proc.returncode != 0:
-        send_error(req_id, "EMOUNT", (proc.stderr or out or "could not mount").strip())
+    if path is None:
+        send_error(req_id, "EMOUNT", message)
         return
-    path = out.split(" at ", 1)[1].strip().rstrip(".") if " at " in out else ""
     emit({"id": req_id, "t": "done", "path": path})
+
+
+def op_unlockdev(req, cancel_event):
+    req_id = req["id"]
+    device = req.get("device")
+    passphrase = req.get("passphrase")
+    if not valid_block_device(device):
+        send_error(req_id, "EINVAL", "block device required")
+        return
+    if not isinstance(passphrase, str) or not passphrase:
+        send_error(req_id, "EINVAL", "passphrase required")
+        return
+    try:
+        proc = run_trusted("udisksctl", ["unlock", "-b", device, "--key-file", "/dev/stdin"],
+                           stdin_text=passphrase, timeout=120)
+        cleartext = unlocked_device((proc.stdout or "") + "\n" + (proc.stderr or ""), device)
+        if not valid_block_device(cleartext):
+            message = udisks_message(proc.stderr or proc.stdout, "could not unlock")
+            if any(hint in message.lower() for hint in WRONG_PASSPHRASE):
+                send_error(req_id, "EPASSPHRASE", "wrong passphrase")
+            else:
+                send_error(req_id, "EUNLOCK", message)
+            return
+        path, message = udisks_mount(cleartext)
+    except FileNotFoundError:
+        send_error(req_id, "EUNSUPPORTED", "udisksctl is not installed")
+        return
+    except subprocess.TimeoutExpired:
+        send_error(req_id, "ETIMEDOUT", "unlock timed out")
+        return
+    emit({"id": req_id, "t": "done", "device": cleartext, "path": path or "",
+          "message": udisks_message(message, "") if path is None else ""})
 
 
 def op_unmountdev(req, cancel_event):
     req_id = req["id"]
     device = req.get("device")
+    power_off = req.get("powerOff") is True
     if not valid_block_device(device):
         send_error(req_id, "EINVAL", "block device required")
         return
     try:
         proc = run_trusted("udisksctl", ["unmount", "-b", device], timeout=60)
+        if proc.returncode != 0:
+            send_error(req_id, "EMOUNT", (proc.stderr or proc.stdout or "could not unmount").strip())
+            return
+        tree = run_tool(["lsblk", "-J", "-o", "NAME,PATH,FSTYPE"])
+        if not tree and os.path.realpath(device).startswith("/dev/dm-"):
+            send_error(req_id, "ELOCK", "could not check whether the drive needs locking")
+            return
+        container = crypto_container(tree.get("blockdevices") if tree else None, device)
+        if container:
+            proc = run_trusted("udisksctl", ["lock", "-b", container], timeout=60)
+            if proc.returncode != 0:
+                send_error(req_id, "ELOCK", udisks_message(proc.stderr or proc.stdout, "could not lock"))
+                return
+        if power_off:
+            proc = run_trusted("udisksctl", ["power-off", "-b", container or device], timeout=60)
+            if proc.returncode != 0:
+                send_error(req_id, "EMOUNT", udisks_message(proc.stderr or proc.stdout, "could not power off"))
+                return
     except FileNotFoundError:
         send_error(req_id, "EUNSUPPORTED", "udisksctl is not installed")
         return
     except subprocess.TimeoutExpired:
         send_error(req_id, "ETIMEDOUT", "unmount timed out")
         return
-    if proc.returncode != 0:
-        send_error(req_id, "EMOUNT", (proc.stderr or proc.stdout or "could not unmount").strip())
-        return
-    emit({"id": req_id, "t": "done"})
+    emit({"id": req_id, "t": "done", "locked": bool(container)})
 
 
 SPACE_LOCK = threading.Lock()
@@ -3585,6 +3682,9 @@ def op_drives(req):
     if lsblk_data:
         for dev in flatten_lsblk(lsblk_data.get("blockdevices")):
             mount = dev.get("mountpoint")
+            if dev.get("fstype") == "crypto_LUKS" and dev.get("rm"):
+                for child in dev.get("children") or []:
+                    child["rm"] = True
             total = None
             free = None
             if mount and mount in space_by_mount:
@@ -3594,6 +3694,7 @@ def op_drives(req):
                 "size": dev.get("size"), "fstype": dev.get("fstype"), "mount": mount,
                 "removable": bool(dev.get("rm")), "free": free, "total": total,
                 "mountable": not mount and mountable_device(dev),
+                "locked": not mount and locked_container(dev),
             })
     seen_mounts = set(d["mount"] for d in drives if d.get("mount"))
     for target, source, fstype in mounted_volumes:
@@ -4208,6 +4309,7 @@ CANCELLABLE_OPS = {
     "move": lambda r, c: op_copy_move(r, c, True),
     "mounturi": op_mounturi,
     "mountdev": op_mountdev,
+    "unlockdev": op_unlockdev,
     "unmountdev": op_unmountdev,
     "recent": op_recent,
     "setdefaultfm": op_setdefaultfm,

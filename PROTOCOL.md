@@ -427,12 +427,14 @@ Replies `{"t": "space", "total": T, "free": F, "used": U, "mount": M}` then `don
 {"id": N, "op": "drives"}
 ```
 
-Replies `{"t": "drives", "drives": [{"name", "path", "label", "size", "fstype", "mount", "removable", "free", "total", "mountable"}]}`
+Replies `{"t": "drives", "drives": [{"name", "path", "label", "size", "fstype", "mount", "removable", "free", "total", "mountable", "locked"}]}`
 then `done`. Sourced from `lsblk -J -b -o ...` and `findmnt -J -b`. Both tools are part
 of util-linux and are always present. A missing tool yields an empty list, never an
 error. `mountable` is true for an unmounted partition with a filesystem udisks can mount.
 Swap, LUKS, LVM and RAID members, and EFI, BIOS boot, Microsoft reserved and Windows
-recovery partitions are never mountable. Free space is read for every mount at once with
+recovery partitions are never mountable. `locked` is true for a LUKS container that is
+not unlocked, one with no device inside it. Unlock it with `unlockdev`. The filesystem
+inside an unlocked container takes `removable` from the container. Free space is read for every mount at once with
 a 1.5 second limit; a mount that does not answer is left without `free` and `total`, and
 keeps at most one waiting thread no matter how often drives are polled.
 
@@ -440,12 +442,31 @@ keeps at most one waiting thread no matter how often drives are polled.
 
 ```
 {"id": N, "op": "mountdev", "device": "/dev/sdb1"}
-{"id": N, "op": "unmountdev", "device": "/dev/sdb1"}
+{"id": N, "op": "unmountdev", "device": "/dev/sdb1", "powerOff": false}
 ```
 
 Runs `udisksctl mount -b` or `udisksctl unmount -b`. `device` must be a path under `/dev/`.
-`mountdev` replies `done` with `path`, the new mount point. Errors: `EINVAL` for a bad
-device, `EUNSUPPORTED` without udisksctl, `ETIMEDOUT`, and `EMOUNT` with udisks' message.
+`mountdev` replies `done` with `path`, the new mount point. When the unmounted device is
+the filesystem inside a LUKS container, `unmountdev` then locks the container with
+`udisksctl lock -b`. With `powerOff: true` it then runs `udisksctl power-off -b` on the
+container, or on the device itself. It replies `done` with `locked`. Errors: `EINVAL` for
+a bad device, `EUNSUPPORTED` without udisksctl, `ETIMEDOUT`, `EMOUNT` with udisks'
+message, and `ELOCK` when the unmount worked but the lock did not.
+
+### unlockdev
+
+```
+{"id": N, "op": "unlockdev", "device": "/dev/sda3", "passphrase": "..."}
+```
+
+Runs `udisksctl unlock -b <device> --key-file /dev/stdin` with the passphrase on standard
+input, never in argv, then mounts the unlocked device as `mountdev` does. A container
+that is already unlocked is mounted as it is. Replies `done` with `device`, the unlocked
+device, and `path`, the mount point. When the mount fails, `path` is empty and `message`
+says why. The container stays unlocked. Errors: `EINVAL` for a bad device or an empty
+passphrase, `EPASSPHRASE` for a wrong passphrase, `EUNLOCK` with udisks' message,
+`EUNSUPPORTED` without udisksctl, and `ETIMEDOUT` after two minutes, which leaves time
+for a polkit prompt.
 
 ### extract
 

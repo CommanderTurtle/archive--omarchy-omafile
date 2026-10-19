@@ -29,7 +29,7 @@ A lightweight, fast file manager plugin for Omarchy running in the shell.
 * Omarchy 4 (Quattro)
 * Python 3 (included with Omarchy)
 * util-linux `lsblk` and `findmnt` (included with Arch)
-* Optional: `udisksctl` for ejecting removable drives
+* Optional: `udisksctl` for mounting, unlocking and ejecting drives
 * Optional: `gvfs` and `gvfs-smb` for connecting to network servers
 * Optional: PyGObject for Show in folder from other applications
 * Optional: `qt6-multimedia` and `ffmpeg` for playing audio in the preview (Omarchy installs both)
@@ -132,6 +132,8 @@ Right click places, bookmarks and network entries for a menu: open here or in an
 Recent lists the files you opened most recently, newest first, from the same history the rest of the desktop uses. Opening one goes straight to the file. There is no folder above it, so leave by picking a place or a bookmark.
 
 Unmounted partitions are listed greyed out, and clicking one mounts it through udisks and opens it. Right click a drive to open it, mount, unmount, eject or hide it. System mounts such as `/boot` can't be unmounted from here. Hover a drive and click the eye to hide it. Hidden drives come back from Settings.
+
+Locked LUKS encrypted partitions are listed with a lock, under their LUKS label or their size, such as 2 TB Encrypted. Click one, or right click it and choose Unlock, to type its passphrase. Omafile unlocks it through udisks, mounts it and opens it. The passphrase is never stored. An internal drive can also ask for your user password, the same as mounting one does. Unmounting or ejecting an unlocked drive locks it again.
 
 ### Network drives
 

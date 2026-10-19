@@ -755,6 +755,96 @@ ShellRoot {
         waitRows()
       }
 
+      function test_3o_encryptedDrives() {
+        mock.drives = [
+          { name: "sda3", label: "", path: "/dev/sda3", mount: "", removable: false, fstype: "crypto_LUKS",
+            size: 2000000000000, mountable: false, locked: true },
+          { name: "sdb1", label: "Vault", path: "/dev/sdb1", mount: "", removable: true, fstype: "crypto_LUKS",
+            size: 64000000000, mountable: false, locked: true },
+          { name: "luks-1", label: "Inner", path: "/dev/mapper/luks-1", mount: "/run/media/me/Inner", removable: true,
+            fstype: "ext4", free: 1, total: 2 }
+        ]
+        var drives = networkRows().drives
+        compare(drives.length, 3)
+        var bare = drives[0], vault = drives[1], inner = drives[2]
+        compare(bare.locked, true)
+        compare(bare.label, Model.formatSize(2000000000000) + " Encrypted")
+        compare(vault.label, "Vault", "a LUKS label is shown as is")
+        compare(inner.locked, false)
+        compare(menuLabels(browser.placeMenuActions(bare)), ["Unlock…", "Hide", "Move up", "Move down", "Reset order"])
+
+        mock.calls = []
+        browser.runPlaceAction("unlock", bare)
+        compare(browser.dialogMode, "unlock")
+        compare(mock.called("mountDrive"), null, "a locked drive is never mounted directly")
+        var field = findChild(browser, "unlockField")
+        tryCompare(field, "activeFocus", true)
+        browser.submitUnlock()
+        compare(mock.called("unlockDrive"), null, "an empty passphrase is not sent")
+        compare(browser.unlockFailed, true)
+
+        mock.unlockResult = { code: "EPASSPHRASE", message: "wrong passphrase" }
+        field.text = "nope"
+        keyClick(Qt.Key_Return)
+        compare(mock.called("unlockDrive").args[0], "/dev/sda3")
+        compare(mock.called("unlockDrive").args[1], "nope")
+        compare(browser.dialogMode, "unlock", "a wrong passphrase keeps the dialog open")
+        compare(browser.unlockStatus, "Wrong passphrase. Try again.")
+        compare(field.text, "", "a wrong passphrase is cleared")
+
+        mock.unlockResult = { path: "/tmp/docs" }
+        mock.calls = []
+        field.text = "correct horse"
+        keyClick(Qt.Key_Return)
+        compare(mock.called("unlockDrive").args[1], "correct horse")
+        compare(browser.dialogMode, "", "the dialog closes once unlocked")
+        compare(field.text, "", "the passphrase is not kept")
+        compare(pane().path, "/tmp/docs", "an unlocked drive opens")
+
+        mock.unlockResult = { path: "", device: "/dev/dm-1", message: "no filesystem" }
+        browser.askUnlock(vault)
+        field.text = "correct horse"
+        browser.submitUnlock()
+        compare(browser.dialogMode, "")
+        compare(browser.statusText, "Unlocked Vault, but could not mount it: no filesystem")
+
+        browser.askUnlock(vault)
+        field.text = "typed"
+        keyClick(Qt.Key_Escape)
+        compare(browser.dialogMode, "")
+        compare(field.text, "", "cancelling forgets the passphrase")
+
+        mock.servers = ["ssh://laptop/"]
+        mock.serverSettings = { "ssh://laptop/": { user: "menno", domain: "", anonymous: false } }
+        mock.connectResult = { error: "Permission denied" }
+        browser.askUnlock(vault)
+        field.text = "half typed"
+        browser.openServer("ssh://laptop/")
+        compare(browser.dialogMode, "unlock", "a failed quick connect never replaces the unlock dialog")
+        compare(browser.statusText, "Could not connect to laptop: Permission denied")
+        browser.showDialog("shortcuts", "Keyboard shortcuts", "", null)
+        compare(field.text, "", "another dialog taking over forgets the passphrase")
+        compare(field.editUndo.length, 0, "and its undo history")
+        browser.closeDialog()
+        mock.servers = []
+        mock.serverSettings = ({})
+        mock.connectResult = null
+
+        pane().navigate("/run/media/me/Inner")
+        mock.unmountResult = { code: "ELOCK", message: "busy" }
+        mock.calls = []
+        browser.runPlaceAction("unmount", inner)
+        compare(mock.called("unmountDrive").args[0], "/dev/mapper/luks-1")
+        compare(browser.statusText, "Unmounted /run/media/me/Inner, but could not lock it: busy")
+        mock.unmountResult = ({})
+        verify(menuLabels(browser.placeMenuActions(inner)).indexOf("Eject") >= 0, "an encrypted stick can be ejected")
+
+        mock.unlockResult = { path: "/tmp/docs" }
+        mock.drives = []
+        pane().navigate("/tmp")
+        waitRows()
+      }
+
       function test_3m_gridCaptions() {
         waitRows()
         pane().setSortOrder("name", false)

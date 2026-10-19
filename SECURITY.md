@@ -50,7 +50,7 @@ Only the latest release on `main` receives fixes.
 | `bin/omafile-portal-setup` | Only when Pick files for other apps is turned on or off |
 | `/usr/bin/pkexec /usr/bin/install`, or `/usr/bin/sudo` from a terminal | Once, when Pick files for other apps is turned on and `omafile.portal` is missing or different. Fixed paths, never looked up on your `PATH` |
 | `gdbus` `ReloadConfig`, `systemctl --user restart xdg-desktop-portal.service` | When Pick files for other apps is turned on or off, so the portal picks up the change |
-| `udisksctl` | Only when you mount, unmount or eject a drive |
+| `udisksctl` | Only when you mount, unlock, unmount or eject a drive |
 | `bsdtar` | Only when you extract or compress. Extracting reads the archive from an open file handle, refuses absolute paths and `..` entries, and goes into a private temporary folder handed over as an open folder handle, which is moved into place only when it succeeds. Compressing works inside the folder through an open handle, reads item names from standard input, writes to a new file on standard output, never follows symlinks, and never replaces an existing file |
 | `wl-copy`, `wl-paste` | Copy path, copy/cut files, paste files or images, and clipboard checks while cut markers are active |
 | `xdg-terminal-exec`, `omarchy-launch-editor` | Only when you choose Open in terminal, Open in editor, or the agent item such as Open Claude Code here |
@@ -68,6 +68,8 @@ This is deliberate and reversible. Turning the setting off deletes the service f
 ## Credentials
 
 Server passwords are written to the standard input of `gio mount`, never passed as arguments, so they do not appear in `ps` output or in any shell history. Omafile does not store passwords. Only the server address is remembered, so it can be offered again in the Network section.
+
+A drive passphrase takes the same route: it reaches the helper as JSON on standard input, and the helper writes it to the standard input of `udisksctl unlock --key-file /dev/stdin`. It is never an argument, never written to a file, and never stored. The field and its undo history are cleared when the dialog closes, when another dialog replaces it, and after a wrong passphrase. A server connection that fails in the background while the dialog is open reports in the status bar instead of opening the Connect dialog over it, so typing cannot carry on into a server password field. udisks and polkit decide who may unlock a drive, the same as for mounting one.
 
 ## Trust model
 

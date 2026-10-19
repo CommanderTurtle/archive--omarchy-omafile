@@ -211,7 +211,7 @@ Item {
     bookmarksLoaded = false
     _queue = _queue.filter(function (line) {
       var op = JSON.parse(line).op
-      return op !== "bookmarks" && op !== "setbookmarks"
+      return op !== "bookmarks" && op !== "setbookmarks" && op !== "unlockdev"
     })
     _pending = ({})
     _thumbWaiting = ({})
@@ -1279,9 +1279,30 @@ Item {
     })
   }
 
-  function ejectDrive(devicePath) {
-    Quickshell.execDetached(["sh", "-c",
-      "udisksctl unmount -b \"$1\" && udisksctl power-off -b \"$1\"", "omafile", String(devicePath)])
+  function unlockDrive(devicePath, passphrase, onDone, onError) {
+    return request({ op: "unlockdev", device: String(devicePath), passphrase: String(passphrase) }, {
+      onDone: function (m) {
+        root.refreshDrives()
+        if (onDone) onDone(m)
+      },
+      onError: function (m) {
+        root.refreshDrives()
+        if (onError) onError(m)
+      }
+    })
+  }
+
+  function ejectDrive(devicePath, onDone, onError) {
+    return request({ op: "unmountdev", device: String(devicePath), powerOff: true }, {
+      onDone: function (m) {
+        root.refreshDrives()
+        if (onDone) onDone(m)
+      },
+      onError: function (m) {
+        root.refreshDrives()
+        if (onError) onError(m)
+      }
+    })
   }
 
   function noteRecent(path) {

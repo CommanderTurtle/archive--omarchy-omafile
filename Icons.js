@@ -89,6 +89,7 @@ var actionGlyphs = {
   sort: '',
   menu: '',
   eject: '',
+  lock: '󰌾',
   open: '',
   terminal: '',
   editor: '',

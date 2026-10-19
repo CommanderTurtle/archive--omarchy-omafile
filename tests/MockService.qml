@@ -106,8 +106,19 @@ QtObject {
     if (mountResult.error) { if (onError) onError({ message: mountResult.error }) }
     else if (onDone) onDone(mountResult)
   }
-  function unmountDrive(device, onDone, onError) { record("unmountDrive", [device]); if (onDone) onDone({}) }
-  function ejectDrive(device) { record("ejectDrive", [device]) }
+  property var unmountResult: ({})
+  function unmountDrive(device, onDone, onError) {
+    record("unmountDrive", [device])
+    if (unmountResult.code) { if (onError) onError(unmountResult) }
+    else if (onDone) onDone({})
+  }
+  function ejectDrive(device, onDone, onError) { record("ejectDrive", [device]) }
+  property var unlockResult: ({ path: "/tmp/docs" })
+  function unlockDrive(device, passphrase, onDone, onError) {
+    record("unlockDrive", [device, passphrase])
+    if (unlockResult.code) { if (onError) onError(unlockResult) }
+    else if (onDone) onDone(unlockResult)
+  }
   function togglePinned(path) { record("togglePinned", [path]) }
   function placeOrderFor(section) { return placeOrder[section] || [] }
   function hasPlaceOrder(section) { return placeOrderFor(section).length > 0 }

@@ -61,7 +61,7 @@ Item {
     if (!row) return
     if (row.connect === true) { sidebar.connectServer(""); return }
     if (row.server === true) { sidebar.connectServer(String(row.uri || "")); return }
-    if (row.unmounted === true) { sidebar.mountDrive(row.device); return }
+    if (row.unmounted === true) { activateDrive(row); return }
     if (!row.path) return
     if (inNewTab) sidebar.openInNewTab(row.path)
     else sidebar.navigate(row.path)
@@ -273,6 +273,7 @@ Item {
   signal connectServer(string uri)
   signal disconnectServer(string path)
   signal mountDrive(string device)
+  signal unlockDrive(var row)
   signal dropRequested(var urls, string dest, var position)
   signal placeMenuRequested(var row, real x, real y)
   signal bookmarkDropped(var paths)
@@ -315,6 +316,18 @@ Item {
     return false
   }
 
+  function activateDrive(row) {
+    if (row.locked === true) sidebar.unlockDrive(row)
+    else sidebar.mountDrive(row.device)
+  }
+
+  function lockedLabel(drive) {
+    var name = String(drive.label || "")
+    if (name) return name
+    var size = Number(drive.size) || 0
+    return size > 0 ? Model.formatSize(size) + " Encrypted" : "Encrypted"
+  }
+
   function driveLabel(drive) {
     var mount = String(drive.mount || "")
     var name = String(drive.label || "")
@@ -329,7 +342,7 @@ Item {
 
   function mountableDrive(drive) {
     if (!drive) return false
-    if (!drive.mount) return drive.mountable === true
+    if (!drive.mount) return drive.mountable === true || drive.locked === true
     var mount = String(drive.mount)
     if (mount.charAt(0) === "[") return false
     if (String(drive.fstype || "") === "swap") return false
@@ -378,17 +391,19 @@ Item {
         var drive = drives[d]
         if (!mountableDrive(drive) || drive.network === true) continue
         var isMounted = !!drive.mount
+        var locked = !isMounted && drive.locked === true
         var hideKey = isMounted ? String(drive.mount) : String(drive.path || "")
         if (service && service.driveHidden(hideKey)) continue
         vols.push({
           key: drive.removable ? "usb" : "drive",
           label: isMounted ? driveLabel(drive)
-            : String(drive.label || Model.basename(String(drive.path || ""))),
+            : (locked ? lockedLabel(drive) : String(drive.label || Model.basename(String(drive.path || "")))),
           path: isMounted ? String(drive.mount) : "",
           device: String(drive.path || ""),
           hideKey: hideKey,
           orderId: hideKey,
           unmounted: !isMounted,
+          locked: locked,
           unmountable: isMounted && (drive.removable === true || userMount(drive.mount)),
           removable: drive.removable === true,
           free: Number(drive.free) || 0,
@@ -640,7 +655,7 @@ Item {
                       return
                     }
                     if (modelData.unmounted === true) {
-                      sidebar.mountDrive(modelData.device)
+                      sidebar.activateDrive(modelData)
                       return
                     }
                     if (mouse.button === Qt.MiddleButton) sidebar.openInNewTab(modelData.path)
@@ -725,6 +740,17 @@ Item {
                         anchors.fill: parent
                         onClicked: sidebar.hideDrive(modelData.hideKey)
                       }
+                    }
+
+                    Text {
+                      textFormat: Text.PlainText
+                      objectName: "placeLocked"
+                      anchors.verticalCenter: parent.verticalCenter
+                      visible: modelData.locked === true
+                      text: Icons.actionGlyph("lock")
+                      color: Util.alpha(Color.foreground, 0.45)
+                      font.family: Style.font.family
+                      font.pixelSize: Style.font.iconSmall
                     }
 
                     Text {

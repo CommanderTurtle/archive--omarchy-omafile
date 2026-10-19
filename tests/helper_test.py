@@ -1652,11 +1652,18 @@ class DirsDrivesTests(HelperTestCase):
 
     def test_mountdev_rejects_paths_outside_dev(self):
         for device in ["/etc/passwd", "/dev/../etc/passwd", "", 7]:
-            for op in ["mountdev", "unmountdev"]:
-                msgs = self.helper.call({"id": self.next_id(), "op": op, "device": device})
+            for op in ["mountdev", "unmountdev", "unlockdev"]:
+                msgs = self.helper.call({"id": self.next_id(), "op": op, "device": device, "passphrase": "x"})
                 err = self.terminal(msgs)
                 self.assertEqual(err["t"], "error")
                 self.assertEqual(err["code"], "EINVAL")
+
+    def test_unlockdev_needs_a_passphrase(self):
+        for passphrase in [None, "", 7]:
+            msgs = self.helper.call({"id": self.next_id(), "op": "unlockdev", "device": "/dev/sda3", "passphrase": passphrase})
+            err = self.terminal(msgs)
+            self.assertEqual(err["t"], "error")
+            self.assertEqual(err["code"], "EINVAL")
 
 class MountableDeviceTests(unittest.TestCase):
     def load_helper(self):
@@ -1679,6 +1686,59 @@ class MountableDeviceTests(unittest.TestCase):
             "path": "/dev/nvme0n1p1", "fstype": "vfat",
             "parttype": "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"}))
         self.assertFalse(helper.mountable_device({"path": "sdb1", "fstype": "ext4"}))
+
+    def test_only_a_locked_luks_container_is_offered_for_unlocking(self):
+        helper = self.load_helper()
+        self.assertTrue(helper.locked_container({"path": "/dev/sda3", "fstype": "crypto_LUKS"}))
+        self.assertFalse(helper.locked_container({
+            "path": "/dev/nvme0n1p2", "fstype": "crypto_LUKS",
+            "children": [{"path": "/dev/mapper/root", "fstype": "btrfs"}]}))
+        self.assertFalse(helper.locked_container({"path": "/dev/sdb1", "fstype": "ext4"}))
+        self.assertFalse(helper.locked_container({"path": "sda3", "fstype": "crypto_LUKS"}))
+        self.assertFalse(helper.locked_container({
+            "path": "/dev/sda1", "fstype": "crypto_LUKS",
+            "parttype": "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"}))
+
+    def test_the_container_of_an_unlocked_filesystem_is_found(self):
+        helper = self.load_helper()
+        tree = [
+            {"name": "nvme0n1", "path": "/dev/nvme0n1", "fstype": None, "children": [
+                {"name": "nvme0n1p2", "path": "/dev/nvme0n1p2", "fstype": "crypto_LUKS", "children": [
+                    {"name": "root", "path": "/dev/mapper/root", "fstype": "btrfs"}]}]},
+            {"name": "sdb", "path": "/dev/sdb", "fstype": None, "children": [
+                {"name": "sdb1", "path": "/dev/sdb1", "fstype": "ext4"}]},
+        ]
+        self.assertEqual(helper.crypto_container(tree, "/dev/mapper/root"), "/dev/nvme0n1p2")
+        self.assertEqual(helper.crypto_container(tree, "/dev/sdb1"), "")
+        self.assertEqual(helper.crypto_container(None, "/dev/mapper/root"), "")
+
+    def test_the_unlocked_device_is_read_from_udisks_output(self):
+        helper = self.load_helper()
+        self.assertEqual(helper.unlocked_device("Unlocked /dev/sda3 as /dev/dm-1.\n", "/dev/sda3"), "/dev/dm-1")
+        self.assertEqual(helper.unlocked_device(
+            "Error unlocking /dev/sda3: GDBus.Error:org.freedesktop.UDisks2.Error.Failed: "
+            "Device /dev/sda3 is already unlocked as /dev/dm-4\n", "/dev/sda3"), "/dev/dm-4")
+        self.assertEqual(helper.unlocked_device(
+            "Error unlocking /dev/sda3: GDBus.Error:org.freedesktop.UDisks2.Error.Failed: "
+            "Error unlocking /dev/sda3: Failed to activate device: Incorrect passphrase.\n", "/dev/sda3"), "")
+        self.assertEqual(helper.unlocked_device("", "/dev/sda3"), "")
+
+    def test_only_the_requested_device_counts_as_unlocked(self):
+        helper = self.load_helper()
+        self.assertEqual(helper.unlocked_device("Unlocked /dev/sdb1 as /dev/dm-7.\n", "/dev/sda3"), "")
+        self.assertEqual(helper.unlocked_device(
+            "Error: Device /dev/sdb1 is already unlocked as /dev/dm-7\n", "/dev/sda3"), "")
+        self.assertEqual(helper.unlocked_device(
+            "note: Unlocked /dev/sda3 as /dev/dm-9.\nUnlocked /dev/sda3 as /dev/dm-2.\n", "/dev/sda3"), "/dev/dm-2")
+
+    def test_udisks_errors_drop_the_dbus_prefix(self):
+        helper = self.load_helper()
+        self.assertEqual(helper.udisks_message(
+            "Error locking /dev/sda3: GDBus.Error:org.freedesktop.UDisks2.Error.Failed: "
+            "Error locking /dev/dm-1 (/dev/sda3): Failed to deactivate device: Device or resource busy\n",
+            "fallback"), "Error locking /dev/dm-1 (/dev/sda3): Failed to deactivate device: Device or resource busy")
+        self.assertEqual(helper.udisks_message("plain failure", "fallback"), "plain failure")
+        self.assertEqual(helper.udisks_message("", "fallback"), "fallback")
 
 class ClipboardFormatTests(unittest.TestCase):
     def load_helper(self):
@@ -1876,6 +1936,25 @@ class TrustedRunTests(unittest.TestCase):
                     os.environ["PATH"] = saved
             self.assertNotEqual(resolved, shadow)
             self.assertIn(os.path.dirname(resolved), helper.TRUSTED_BIN_DIRS)
+
+    def test_drive_tools_ignore_a_shadowed_lsblk_on_path(self):
+        helper = self.load_helper()
+        with tempfile.TemporaryDirectory() as tmp:
+            shadow = os.path.join(tmp, "lsblk")
+            with open(shadow, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\necho '{\"blockdevices\": [{\"path\": \"/dev/shadowed\"}]}'\n")
+            os.chmod(shadow, 0o755)
+            saved = os.environ.get("PATH")
+            os.environ["PATH"] = tmp + os.pathsep + (saved or "")
+            try:
+                tree = helper.run_tool(["lsblk", "-J", "-o", "NAME,PATH"])
+            finally:
+                if saved is None:
+                    os.environ.pop("PATH", None)
+                else:
+                    os.environ["PATH"] = saved
+            paths = [d.get("path") for d in helper.flatten_lsblk((tree or {}).get("blockdevices"))]
+            self.assertNotIn("/dev/shadowed", paths)
 
     def test_a_program_outside_trusted_directories_is_refused(self):
         helper = self.load_helper()

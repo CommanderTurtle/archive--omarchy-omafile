@@ -34,7 +34,7 @@ var placeKeys = ['home', 'desktop', 'documents', 'downloads', 'music', 'pictures
 
 var actionKeys = ['copy', 'cut', 'paste', 'rename', 'trash', 'trashFull', 'delete', 'restore', 'newfolder', 'newfile', 'up',
   'back', 'forward', 'refresh', 'search', 'hidden', 'list', 'grid', 'columns', 'split', 'close', 'add',
-  'sort', 'menu', 'eject', 'open', 'terminal', 'editor', 'properties', 'cancel', 'check', 'warning',
+  'sort', 'menu', 'eject', 'lock', 'open', 'terminal', 'editor', 'properties', 'cancel', 'check', 'warning',
   'error', 'chevronRight', 'chevronDown', 'chevronUp', 'chevronLeft', 'extract', 'play', 'pause',
   'seekBack', 'seekForward', 'volume', 'muted'];
 

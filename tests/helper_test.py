@@ -1527,6 +1527,31 @@ class BarIconTests(unittest.TestCase):
             self.assertNotIn("showHidden", trash_entry)
             self.assertFalse(trash_entry["trashConfirm"])
 
+    def test_settings_saved_at_the_same_time_all_survive(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            h = self.helper_with_config(tmp, self.base_config())
+            h.emit = lambda *a, **k: None
+            h.send_done = lambda *a, **k: None
+            h.send_error = lambda *a, **k: None
+            real_read = h.read_shell_config
+
+            def slow_read():
+                config = real_read()
+                time.sleep(0.05)
+                return config
+
+            h.read_shell_config = slow_read
+            keys = ["key%d" % i for i in range(8)]
+            threads = [threading.Thread(target=h.op_barsettings, args=({"id": i, "settings": {k: i}},))
+                       for i, k in enumerate(keys)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+            files_entry = [e for _, _, _, e in h.omafile_entries(real_read()) if not h.is_trash_entry(e)][0]
+            self.assertEqual({k: files_entry.get(k) for k in keys}, {k: i for i, k in enumerate(keys)},
+                             "two settings saved together, such as an editor and its choice, are both kept")
+
     def test_write_is_atomic_and_reloadable(self):
         with tempfile.TemporaryDirectory() as tmp:
             h = self.helper_with_config(tmp, self.base_config())

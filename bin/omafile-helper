@@ -4004,7 +4004,20 @@ def bar_state(config):
     }
 
 
+SHELL_CONFIG_LOCK = threading.Lock()
+
+
 def op_baricon(req):
+    with SHELL_CONFIG_LOCK:
+        update_bar_icon(req)
+
+
+def op_barsettings(req):
+    with SHELL_CONFIG_LOCK:
+        update_bar_settings(req)
+
+
+def update_bar_icon(req):
     req_id = req["id"]
     action = str(req.get("action") or "status")
     try:
@@ -4060,7 +4073,7 @@ def op_baricon(req):
     send_done(req_id)
 
 
-def op_barsettings(req):
+def update_bar_settings(req):
     req_id = req["id"]
     settings = req.get("settings")
     if not isinstance(settings, dict):

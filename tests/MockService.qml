@@ -63,7 +63,38 @@ QtObject {
   property var watchCallback: null
   function watchDirectory(path, onChanged) { watchCallback = onChanged; return 3 }
   function unwatch() {}
-  function cancel() {}
+  function cancel(id) { record("cancel", [id]) }
+  property var textFiles: ({})
+  property var writeResult: null
+  function readText(path, onDone, onError) {
+    record("readText", [path])
+    var file = textFiles[path]
+    Qt.callLater(function () {
+      if (!file) { if (onError) onError({ code: "EBINARY", message: "this is not a text file" }); return }
+      onDone({ t: "text", text: file.text, path: path, crlf: file.crlf === true, bom: file.bom === true,
+        writable: file.writable !== false, ino: "1", dev: "2", mtimeNs: "3", size: file.text.length })
+    })
+    return 0
+  }
+  function writeText(path, text, expect, force, crlf, bom, onDone, onError) {
+    record("writeText", [path, text, expect, force, crlf, bom])
+    Qt.callLater(function () {
+      if (mock.writeResult && mock.writeResult.code && !force) { if (onError) onError(mock.writeResult); return }
+      if (onDone) onDone({ path: path, ino: "1", dev: "2", mtimeNs: "9", size: text.length })
+    })
+    return 0
+  }
+  property var duplicateResult: null
+  function findDuplicates(root, path, hidden, onProgress, onDone, onError) {
+    record("findDuplicates", [root, path, hidden])
+    if (duplicateResult && duplicateResult.pending) return 77
+    Qt.callLater(function () {
+      onProgress({ phase: "looking", files: 10, current: root, done: 0, total: 0 })
+      if (mock.duplicateResult && mock.duplicateResult.error) onError(mock.duplicateResult.error)
+      else onDone(mock.duplicateResult || { groups: [], scanned: 10 })
+    })
+    return 77
+  }
   function noteRecent() {}
   function trashFilesPath() { return "/tmp/.trash" }
   function driveHidden() { return false }

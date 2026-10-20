@@ -3565,7 +3565,11 @@ def op_cliptext(req):
     if mime is None:
         send_done(req_id, text="")
         return
-    data = wl_paste(["--no-newline", "--type", mime], limit=CLIP_TEXT_LIMIT)
+    try:
+        limit = max(1, min(int(req.get("limit") or CLIP_TEXT_LIMIT), EDIT_LIMIT))
+    except (TypeError, ValueError):
+        limit = CLIP_TEXT_LIMIT
+    data = wl_paste(["--no-newline", "--type", mime], limit=limit)
     if data is None:
         send_error(req_id, "E2BIG", "the copied text is too long to paste here")
         return
@@ -4653,6 +4657,431 @@ def op_defaults(req):
     send_done(req_id)
 
 
+EDIT_LIMIT = 1 << 20
+EDIT_WRITE_LIMIT = 8 << 20
+EDIT_LINE_LIMIT = 20000
+UTF8_BOM = b"\xef\xbb\xbf"
+
+
+def file_identity(st):
+    return {"ino": str(st.st_ino), "dev": str(st.st_dev), "mtimeNs": str(st.st_mtime_ns), "size": st.st_size}
+
+
+def same_identity(st, expect):
+    return (isinstance(expect, dict) and str(st.st_ino) == str(expect.get("ino"))
+            and str(st.st_dev) == str(expect.get("dev")) and str(st.st_mtime_ns) == str(expect.get("mtimeNs"))
+            and st.st_size == expect.get("size"))
+
+
+def resolve_trusted_leaf(path_bytes):
+    mounts = None
+    current = os.path.normpath(path_bytes)
+    for _ in range(MAX_LINK_HOPS):
+        pfd, leaf = open_parent_safely(current)
+        try:
+            lst = lstat_at(pfd, leaf)
+            base = real_dir(pfd)
+            if lst is None or not stat.S_ISLNK(lst.st_mode):
+                return os.path.join(base, leaf)
+            if mounts is None:
+                mounts = mount_entries()
+            if not link_trusted(lst, pfd, mounts):
+                raise OSError(errno.ELOOP, "this is a link Omafile will not edit through", to_str(current))
+            target = os.readlink(leaf, dir_fd=pfd)
+        finally:
+            os.close(pfd)
+        current = os.path.normpath(target if target.startswith(b"/") else os.path.join(base, target))
+    raise OSError(errno.ELOOP, "too many links", to_str(path_bytes))
+
+
+def op_readtext(req):
+    req_id = req["id"]
+    path = req.get("path")
+    if not isinstance(path, str) or not path.startswith("/"):
+        send_error(req_id, "EINVAL", "absolute path required")
+        return
+    try:
+        real = resolve_trusted_leaf(to_bytes(path))
+        pfd, leaf = open_parent_safely(real)
+    except OSError as e:
+        send_error(req_id, errno_code(e), e.strerror or str(e), path)
+        return
+    try:
+        fd = os.open(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=pfd)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                send_error(req_id, "EINVAL", "not a regular file", path)
+                return
+            if st.st_size > EDIT_LIMIT:
+                send_error(req_id, "EFBIG", "this file is over 1 MB, too big to edit here", path)
+                return
+            os.set_blocking(fd, True)
+            chunks = []
+            got = 0
+            while got <= EDIT_LIMIT:
+                chunk = os.read(fd, EDIT_LIMIT + 1 - got)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                got += len(chunk)
+        finally:
+            os.close(fd)
+        data = b"".join(chunks)
+        if len(data) > EDIT_LIMIT:
+            send_error(req_id, "EFBIG", "this file is over 1 MB, too big to edit here", path)
+            return
+        bom = data.startswith(UTF8_BOM)
+        if bom:
+            data = data[len(UTF8_BOM):]
+        if b"\0" in data:
+            send_error(req_id, "EBINARY", "this is not a text file", path)
+            return
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            send_error(req_id, "EBINARY", "this file is not UTF-8 text", path)
+            return
+        crlf_count = text.count("\r\n")
+        crlf = crlf_count > 0 and crlf_count >= text.count("\n") - crlf_count
+        if crlf_count:
+            text = text.replace("\r\n", "\n")
+        if "\r" in text:
+            send_error(req_id, "EBINARY", "this file has carriage returns the editor would change", path)
+            return
+        if max(len(line) for line in text.split("\n")) > EDIT_LINE_LIMIT:
+            send_error(req_id, "ELONGLINE", "this file has a line over 20,000 characters, too long to edit here", path)
+            return
+        writable = os.access(real, os.W_OK)
+        emit(dict({"id": req_id, "t": "text", "text": text, "path": to_str(real), "crlf": crlf, "bom": bom,
+                   "writable": writable}, **file_identity(st)))
+        send_done(req_id)
+    except OSError as e:
+        send_error(req_id, errno_code(e), e.strerror or str(e), path)
+    finally:
+        os.close(pfd)
+
+
+def write_all(fd, data):
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        view = view[written:]
+
+
+def replace_contents(pfd, leaf, data, mode, gid):
+    mode &= ~(stat.S_ISUID | stat.S_ISGID)
+    stem = leaf[:180]
+    while True:
+        work = b"." + stem + b".omafile-" + os.urandom(4).hex().encode()
+        try:
+            fd = os.open(work, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600, dir_fd=pfd)
+            break
+        except FileExistsError:
+            continue
+    try:
+        try:
+            if os.fstat(fd).st_gid != gid:
+                try:
+                    os.fchown(fd, -1, gid)
+                except OSError:
+                    raise PermissionError(errno.EPERM, "could not keep the file's group")
+            write_all(fd, data)
+            os.fchmod(fd, mode)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.rename(work, leaf, src_dir_fd=pfd, dst_dir_fd=pfd)
+    except BaseException:
+        try:
+            os.unlink(work, dir_fd=pfd)
+        except OSError:
+            pass
+        raise
+
+
+def overwrite_contents(pfd, leaf, data, lst):
+    fd = os.open(leaf, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=pfd)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_ino != lst.st_ino or st.st_dev != lst.st_dev:
+            raise OSError(errno.EAGAIN, "the file changed while saving")
+        os.set_blocking(fd, True)
+        os.lseek(fd, 0, os.SEEK_SET)
+        write_all(fd, data)
+        os.ftruncate(fd, len(data))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def op_writetext(req):
+    req_id = req["id"]
+    path = req.get("path")
+    text = req.get("text")
+    if not isinstance(path, str) or not path.startswith("/") or not isinstance(text, str):
+        send_error(req_id, "EINVAL", "absolute path and text required")
+        return
+    if len(text) > EDIT_WRITE_LIMIT:
+        send_error(req_id, "EFBIG", "the text is too long to save here", path)
+        return
+    try:
+        data = text.encode("utf-8")
+    except UnicodeEncodeError:
+        send_error(req_id, "EINVAL", "the text has characters that cannot be saved as UTF-8", path)
+        return
+    if req.get("crlf") is True:
+        data = data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    if req.get("bom") is True:
+        data = UTF8_BOM + data
+    force = req.get("force") is True
+    try:
+        pfd, leaf = open_parent_safely(to_bytes(path))
+    except OSError as e:
+        send_error(req_id, errno_code(e), e.strerror or str(e), path)
+        return
+    try:
+        lst = lstat_at(pfd, leaf)
+        if lst is not None and not stat.S_ISREG(lst.st_mode):
+            send_error(req_id, "EINVAL", "this is no longer a regular file", path)
+            return
+        if not force and (lst is None or not same_identity(lst, req.get("expect"))):
+            send_error(req_id, "ECONFLICT", "deleted" if lst is None else "changed", path)
+            return
+        if lst is None:
+            fd = os.open(leaf, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=pfd)
+            try:
+                write_all(fd, data)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        elif lst.st_nlink == 1 and lst.st_uid == os.geteuid():
+            try:
+                replace_contents(pfd, leaf, data, stat.S_IMODE(lst.st_mode), lst.st_gid)
+            except PermissionError:
+                overwrite_contents(pfd, leaf, data, lst)
+        else:
+            overwrite_contents(pfd, leaf, data, lst)
+        st = os.lstat(leaf, dir_fd=pfd)
+        send_done(req_id, path=path, **file_identity(st))
+    except OSError as e:
+        send_error(req_id, errno_code(e), e.strerror or str(e), path)
+    finally:
+        os.close(pfd)
+
+
+DUP_FILE_LIMIT = 300000
+DUP_GROUP_LIMIT = 2000
+DUP_PART = 65536
+DUP_PROGRESS_SECONDS = 0.3
+DUP_MAX_DEPTH = 64
+DUP_DIR_LIMIT = 100000
+DUP_ENTRY_LIMIT = 3000000
+
+
+def dup_digest(path, size, partial, cancel_event):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size != size:
+            return None
+        os.set_blocking(fd, True)
+        h = hashlib.blake2b(digest_size=20)
+        if partial and size > 2 * DUP_PART:
+            h.update(os.pread(fd, DUP_PART, 0))
+            h.update(os.pread(fd, DUP_PART, size - DUP_PART))
+            return h.digest()
+        while True:
+            if cancel_event.is_set():
+                return None
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                return h.digest()
+            h.update(chunk)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def dup_item(item, size):
+    return {"path": to_str(item[0]), "mtime": int(item[3]), "size": size, "dev": item[1], "ino": item[2]}
+
+
+def dup_split(items, size, partial, cancel_event, progress):
+    buckets = {}
+    for item in items:
+        if cancel_event.is_set():
+            return []
+        digest = dup_digest(item[0], size, partial, cancel_event)
+        progress()
+        if digest is not None:
+            buckets.setdefault(digest, []).append(item)
+    return [b for b in buckets.values() if len(b) > 1]
+
+
+def dup_matches(items, size, cancel_event, progress):
+    out = []
+    for bucket in dup_split(items, size, True, cancel_event, progress):
+        if size <= 2 * DUP_PART:
+            out.append(bucket)
+        else:
+            out.extend(dup_split(bucket, size, False, cancel_event, progress))
+    return out
+
+
+def op_duplicates(req, cancel_event):
+    req_id = req["id"]
+    root = req.get("root")
+    target = req.get("path")
+    hidden = req.get("hidden") is True
+    if not isinstance(root, str) or not root.startswith("/") or (target is not None and (
+            not isinstance(target, str) or not target.startswith("/"))):
+        send_error(req_id, "EINVAL", "absolute root required")
+        return
+    root_bytes = to_bytes(root)
+    try:
+        root_st = os.stat(root_bytes)
+    except OSError as e:
+        send_error(req_id, errno_code(e), e.strerror or str(e), root)
+        return
+    if not stat.S_ISDIR(root_st.st_mode):
+        send_error(req_id, "ENOTDIR", "not a folder", root)
+        return
+    want_size = None
+    target_key = None
+    target_item = None
+    if target is not None:
+        try:
+            tst = os.stat(to_bytes(target))
+        except OSError as e:
+            send_error(req_id, errno_code(e), e.strerror or str(e), target)
+            return
+        if not stat.S_ISREG(tst.st_mode):
+            send_error(req_id, "EINVAL", "not a regular file", target)
+            return
+        if tst.st_size == 0:
+            send_error(req_id, "EINVAL", "this file is empty, so every empty file would match", target)
+            return
+        want_size = tst.st_size
+        target_key = (tst.st_dev, tst.st_ino)
+        target_item = (to_bytes(target), tst.st_dev, tst.st_ino, tst.st_mtime)
+    trash = os.path.realpath(to_bytes(os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share"), "Trash")))
+    by_size = {}
+    scanned = 0
+    kept = 0
+    truncated = False
+    last = [0.0]
+
+    def tick(phase, current, done=0, total=0, force=False):
+        now = time.monotonic()
+        if not force and now - last[0] < DUP_PROGRESS_SECONDS:
+            return
+        last[0] = now
+        emit({"id": req_id, "t": "progress", "phase": phase, "files": scanned, "current": to_str(current),
+              "done": done, "total": total})
+
+    stack = [(root_bytes, 0)]
+    folders = 0
+    entries = 0
+    while stack and not truncated:
+        if cancel_event.is_set():
+            send_error(req_id, "ECANCELED", "cancelled")
+            return
+        current, depth = stack.pop()
+        folders += 1
+        if folders > DUP_DIR_LIMIT:
+            truncated = True
+            break
+        tick("looking", current)
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    entries += 1
+                    if entries % 512 == 0 and cancel_event.is_set():
+                        send_error(req_id, "ECANCELED", "cancelled")
+                        return
+                    if entries > DUP_ENTRY_LIMIT:
+                        truncated = True
+                        break
+                    if entry.name == b".Trash" or entry.name.startswith(b".Trash-"):
+                        continue
+                    if not hidden and entry.name.startswith(b"."):
+                        continue
+                    try:
+                        lst = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if stat.S_ISDIR(lst.st_mode):
+                        if lst.st_dev != root_st.st_dev or (entry.name == b"Trash" and os.path.realpath(entry.path) == trash):
+                            continue
+                        if depth >= DUP_MAX_DEPTH:
+                            truncated = True
+                            continue
+                        stack.append((entry.path, depth + 1))
+                        continue
+                    if not stat.S_ISREG(lst.st_mode) or lst.st_size == 0:
+                        continue
+                    scanned += 1
+                    if want_size is not None and lst.st_size != want_size:
+                        continue
+                    by_size.setdefault(lst.st_size, []).append((entry.path, lst.st_dev, lst.st_ino, lst.st_mtime))
+                    kept += 1
+                    if kept >= DUP_FILE_LIMIT:
+                        truncated = True
+                        break
+        except OSError:
+            continue
+    if target_key is not None and not any((i[1], i[2]) == target_key for i in by_size.get(want_size, [])):
+        by_size.setdefault(want_size, []).insert(0, target_item)
+    candidates = []
+    for size, items in by_size.items():
+        seen = set()
+        unique = []
+        for item in items:
+            key = (item[1], item[2])
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(target_item if key == target_key else item)
+        if len(unique) > 1:
+            candidates.append((size, unique))
+    total = sum(len(items) for _, items in candidates)
+    done = [0]
+
+    def progress():
+        done[0] += 1
+        tick("comparing", b"", done[0], total)
+
+    groups = []
+    if target is not None:
+        for size, items in candidates:
+            if not any((i[1], i[2]) == target_key for i in items):
+                continue
+            for bucket in dup_matches(items, size, cancel_event, progress):
+                if any((i[1], i[2]) == target_key for i in bucket):
+                    first = [i for i in bucket if (i[1], i[2]) == target_key]
+                    rest = sorted((i for i in bucket if (i[1], i[2]) != target_key), key=lambda i: i[0])
+                    groups.append({"size": size, "items": [dup_item(i, size) for i in first + rest]})
+    else:
+        for size, items in sorted(candidates, key=lambda c: -c[0]):
+            for bucket in dup_matches(items, size, cancel_event, progress):
+                bucket.sort(key=lambda i: (i[3], i[0]))
+                groups.append({"size": size, "items": [dup_item(i, size) for i in bucket]})
+            if len(groups) >= DUP_GROUP_LIMIT:
+                truncated = True
+                break
+    if cancel_event.is_set():
+        send_error(req_id, "ECANCELED", "cancelled")
+        return
+    groups.sort(key=lambda g: -g["size"] * (len(g["items"]) - 1))
+    tick("comparing", b"", total, total, force=True)
+    send_done(req_id, groups=groups[:DUP_GROUP_LIMIT], scanned=scanned, truncated=truncated)
+
+
 CANCELLABLE_OPS = {
     "list": op_list,
     "search": op_search,
@@ -4672,6 +5101,7 @@ CANCELLABLE_OPS = {
     "extract": op_extract,
     "compress": op_compress,
     "transcode": op_transcode,
+    "duplicates": op_duplicates,
 }
 
 SIMPLE_OPS = {
@@ -4685,6 +5115,8 @@ SIMPLE_OPS = {
     "peek": op_peek,
     "thumbtypes": op_thumbtypes,
     "defaults": op_defaults,
+    "readtext": op_readtext,
+    "writetext": op_writetext,
     "bookmarks": op_bookmarks,
     "setbookmarks": op_setbookmarks,
     "trash": op_trash,

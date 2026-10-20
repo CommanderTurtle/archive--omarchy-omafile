@@ -817,6 +817,22 @@ test('agentChoice uses your own agent, then Omarchy\'s default, then Claude Code
   assert.equal(Model.agentChoice('', 'newagent', true, false).name, 'newagent');
 });
 
+test('textEditable offers the editor for text files up to 1 MB and nothing else', function () {
+  function entry(name, size, kind) { return Model.decodeEntry([name, kind || 'f', size === undefined ? 100 : size, 0, 420, null], '/tmp'); }
+  assert.equal(Model.textEditable(entry('notes.txt')), true);
+  assert.equal(Model.textEditable(entry('Makefile')), true, 'a file with no extension may be text');
+  assert.equal(Model.textEditable(entry('.bashrc')), true);
+  assert.equal(Model.textEditable(entry('script.py', 1024 * 1024)), true);
+  assert.equal(Model.textEditable(entry('huge.log', 1024 * 1024 + 1)), false);
+  assert.equal(Model.textEditable(entry('photo.png')), false);
+  assert.equal(Model.textEditable(entry('report.pdf')), false);
+  assert.equal(Model.textEditable(entry('letter.docx')), false);
+  assert.equal(Model.textEditable(entry('pack.zip')), false);
+  assert.equal(Model.textEditable(entry('docs', 0, 'd')), false);
+  assert.equal(Model.textEditable(entry('gone.txt', 0, 'b')), false);
+  assert.equal(Model.textEditable(entry('fifo.txt', 0, 'o')), false);
+});
+
 test('previewSide matches the screen when automatic and stops at 4096', function () {
   assert.equal(Model.previewSide('auto', 900), 1024, 'a 1080p screen keeps the standard preview');
   assert.equal(Model.previewSide('auto', 1024), 1024);

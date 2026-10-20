@@ -1806,6 +1806,214 @@ ShellRoot {
         mock.transfers = []
       }
 
+      function editorView() { return findChild(browser, "textEditorView") }
+      function editorText() { return findChild(browser, "textEditorText") }
+
+      function test_9ka_textEditor() {
+        waitRows()
+        var alpha = Model.decodeEntry(["alpha.yml", "f", 30, 300, 420, null], "/tmp")
+        var png = Model.decodeEntry(["beta.png", "f", 10, 100, 420, null], "/tmp")
+        var docs = Model.decodeEntry(["docs", "d", 0, 200, 493, null], "/tmp")
+        verify(menuLabels(browser.contextActions(alpha)).indexOf("Edit text") >= 0, "text files can be edited")
+        verify(menuLabels(browser.contextActions(png)).indexOf("Edit text") < 0, "pictures cannot")
+        verify(menuLabels(browser.contextActions(docs)).indexOf("Edit text") < 0, "folders cannot")
+
+        mock.textFiles = { "/tmp/alpha.yml": { text: "key: value\n  nested: a b\n" } }
+        mock.calls = []
+        browser.menuEntry = alpha
+        browser.runAction("edittext")
+        var view = editorView()
+        var area = editorText()
+        verify(view.open)
+        tryCompare(view, "loading", false)
+        tryCompare(area, "activeFocus", true)
+        compare(view.dirty, false)
+        keyClick(Qt.Key_X)
+        keyClick(Qt.Key_Y)
+        compare(area.model.indexOf("xykey: value"), 0, "typing edits the file")
+        verify(view.dirty)
+        verify(findChild(browser, "textEditorTitle").text.indexOf("●") === 0, "the title shows unsaved changes")
+        verify(browser.holdsUnsaved)
+        keyClick(Qt.Key_Down)
+        keyClick(Qt.Key_End)
+        keyClick(Qt.Key_Return)
+        keyClick(Qt.Key_Z)
+        compare(area.model, "xykey: value\n  nested: a b\n  z\n", "Enter keeps the indent, and a no-break space is kept")
+        tryCompare(view, "position", "Line 3, column 4")
+        keyClick(Qt.Key_S, Qt.ControlModifier)
+        var write = mock.called("writeText")
+        compare(write.args[0], "/tmp/alpha.yml")
+        compare(write.args[1], area.model, "the exact text is saved")
+        compare(write.args[3], false)
+        tryCompare(view, "dirty", false)
+        compare(findChild(browser, "textEditorNotice").text, "Saved")
+
+        keyClick(Qt.Key_F, Qt.ControlModifier)
+        var find = findChild(browser, "textEditorFind")
+        tryCompare(find, "activeFocus", true)
+        find.text = "NESTED"
+        keyClick(Qt.Key_Return)
+        compare(findChild(browser, "textEditorNotice").text, "Not found", "a search with capitals is exact")
+        find.text = "nested"
+        keyClick(Qt.Key_Return)
+        compare(area.model.slice(area.selectionStart, area.selectionEnd), "nested")
+        keyClick(Qt.Key_Escape)
+        tryCompare(area, "activeFocus", true)
+
+        keyClick(Qt.Key_Q)
+        verify(view.dirty)
+        mock.calls = []
+        keyClick(Qt.Key_Escape)
+        compare(view.prompt, "unsaved", "closing with unsaved changes asks first")
+        verify(view.open)
+        waitForRendering(browser)
+        mouseClick(findChild(browser, "textEditorDiscard"))
+        compare(view.open, false)
+        compare(mock.called("writeText"), null, "Don't save writes nothing")
+
+        browser.editText(alpha)
+        tryCompare(view, "loading", false)
+        tryCompare(area, "activeFocus", true)
+        keyClick(Qt.Key_W)
+        mock.writeResult = { code: "ECONFLICT", message: "changed" }
+        mock.calls = []
+        keyClick(Qt.Key_S, Qt.ControlModifier)
+        tryCompare(view, "prompt", "conflict")
+        verify(findChild(browser, "textEditorPromptText").text.indexOf("changed on disk") > 0)
+        waitForRendering(browser)
+        mouseClick(findChild(browser, "textEditorConfirm"))
+        tryVerify(function () { return mock.calls.filter(function (c) { return c.name === "writeText" }).length === 2 })
+        compare(mock.calls.filter(function (c) { return c.name === "writeText" })[1].args[3], true, "Overwrite forces the save")
+        tryCompare(view, "dirty", false)
+        mock.writeResult = null
+
+        keyClick(Qt.Key_E)
+        browser.requestClose()
+        compare(view.prompt, "unsaved", "closing Omafile asks before losing edits")
+        waitForRendering(browser)
+        mouseClick(findChild(browser, "textEditorConfirm"))
+        tryCompare(view, "open", false)
+        compare(mock.calls.filter(function (c) { return c.name === "writeText" }).length, 3, "Save then closes")
+
+        mock.textFiles = { "/tmp/locked.txt": { text: "keep me", writable: false } }
+        browser.editText(Model.decodeEntry(["locked.txt", "f", 7, 100, 292, null], "/tmp"))
+        tryCompare(view, "loading", false)
+        tryCompare(area, "activeFocus", true)
+        keyClick(Qt.Key_A)
+        compare(area.model, "keep me", "a read only file is not changed")
+        compare(findChild(browser, "textEditorNotice").text, "This file is read only for you")
+        verify(!findChild(browser, "textEditorSave").enabled)
+        keyClick(Qt.Key_Escape)
+        compare(view.open, false, "nothing to save, so it closes at once")
+
+        browser.editText(Model.decodeEntry(["notes.txt", "f", 7, 100, 420, null], "/tmp"))
+        tryVerify(function () { return view.loadError !== "" })
+        verify(view.loadError.indexOf("not a text file") > 0)
+        waitForRendering(browser)
+        mouseClick(findChild(browser, "textEditorClose"))
+        compare(view.open, false)
+        mock.textFiles = ({})
+      }
+
+      function test_9kb_duplicates() {
+        waitRows()
+        var alpha = Model.decodeEntry(["alpha.yml", "f", 30, 300, 420, null], "/tmp")
+        var docs = Model.decodeEntry(["docs", "d", 0, 200, 493, null], "/tmp")
+        verify(menuLabels(browser.contextActions(alpha)).indexOf("Find duplicates…") >= 0)
+        verify(menuLabels(browser.contextActions(docs)).indexOf("Find duplicates in this folder") >= 0)
+        verify(menuLabels(browser.contextActions(null)).indexOf("Find duplicates here") >= 0)
+
+        mock.duplicateResult = { scanned: 3, groups: [{ size: 30, items: [
+          { path: "/tmp/alpha.yml", mtime: 300, size: 30 },
+          { path: "/tmp/docs/alpha copy.yml", mtime: 400, size: 30 },
+          { path: "/tmp/docs/old.yml", mtime: 100, size: 30 }] }] }
+        var savedStat = mock.statItems
+        mock.statItems = {
+          "/tmp/alpha.yml": { kind: "f", size: 30, mtime: 300 },
+          "/tmp/docs/alpha copy.yml": { kind: "f", size: 30, mtime: 400 },
+          "/tmp/docs/old.yml": { kind: "f", size: 30, mtime: 100 }
+        }
+        mock.calls = []
+        browser.menuEntry = alpha
+        browser.runAction("duplicates")
+        var view = findChild(browser, "duplicatesView")
+        verify(view.open)
+        var call = mock.called("findDuplicates")
+        compare(call.args[0], "/tmp", "a file outside home is looked for in its own folder")
+        compare(call.args[1], "/tmp/alpha.yml")
+        tryCompare(view, "searching", false)
+        compare(view.leftItem.path, "/tmp/alpha.yml", "the file you picked is on the left")
+        compare(view.rightItem.path, "/tmp/docs/alpha copy.yml")
+        compare(view.tagFor(view.rightItem), "Newest")
+        compare(findChild(browser, "duplicatesTitle").text, "Copies of alpha.yml")
+        verify(findChild(browser, "duplicatesSummary").text.indexOf("2 other copies found") === 0, findChild(browser, "duplicatesSummary").text)
+        keyClick(Qt.Key_Right)
+        compare(view.rightItem.path, "/tmp/docs/old.yml")
+        compare(view.tagFor(view.rightItem), "Oldest")
+        keyClick(Qt.Key_Right)
+        compare(view.rightItem.path, "/tmp/docs/alpha copy.yml", "the arrows wrap around")
+
+        mock.statItems["/tmp/docs/alpha copy.yml"] = { kind: "f", size: 31, mtime: 400 }
+        mock.calls = []
+        keyClick(Qt.Key_Delete)
+        compare(mock.called("trashPaths"), null, "a copy that changed since the search is not trashed")
+        verify(view.notice.indexOf("changed since the search") > 0, view.notice)
+        mock.statItems["/tmp/docs/alpha copy.yml"] = { kind: "f", size: 30, mtime: 400 }
+        mock.calls = []
+        keyClick(Qt.Key_Delete)
+        compare(mock.called("trashPaths").args[0], ["/tmp/docs/alpha copy.yml"], "Delete trashes the right copy")
+        compare(view.items.length, 2)
+        compare(view.rightItem.path, "/tmp/docs/old.yml")
+
+        view.askKeepOnly(view.leftItem)
+        verify(findChild(browser, "duplicatesConfirm").visible)
+        mock.calls = []
+        waitForRendering(browser)
+        mouseClick(findChild(browser, "duplicatesConfirmKeep"))
+        compare(mock.called("statPaths").args[0], ["/tmp/docs/old.yml", "/tmp/alpha.yml"], "the kept copy is checked too")
+        compare(mock.called("trashPaths").args[0], ["/tmp/docs/old.yml"], "Keep only this trashes every other copy")
+        compare(view.groups.length, 0)
+        verify(findChild(browser, "duplicatesSummary").text.indexOf("No duplicates found") === 0)
+        keyClick(Qt.Key_Escape)
+        compare(view.open, false)
+
+        mock.duplicateResult = { scanned: 9, groups: [
+          { size: 500, items: [{ path: "/tmp/a.bin", mtime: 1, size: 500 }, { path: "/tmp/docs/a.bin", mtime: 2, size: 500 }] },
+          { size: 20, items: [{ path: "/tmp/b.txt", mtime: 1, size: 20 }, { path: "/tmp/docs/b.txt", mtime: 1, size: 20 }] }] }
+        mock.calls = []
+        browser.menuEntry = null
+        browser.runAction("duplicates")
+        compare(mock.called("findDuplicates").args[1], "", "the folder menu looks for every duplicate")
+        tryCompare(view, "searching", false)
+        compare(findChild(browser, "duplicatesTitle").text, "Duplicates in tmp")
+        verify(findChild(browser, "duplicateGroups").visible)
+        compare(view.tagFor(view.leftItem), "Oldest")
+        keyClick(Qt.Key_Down)
+        compare(view.group.size, 20)
+        compare(view.tagFor(view.leftItem), "", "copies with the same date get no tag")
+        view.reveal("/tmp/docs/b.txt")
+        compare(view.open, false, "Show in folder closes the finder")
+        tryCompare(pane(), "path", "/tmp/docs")
+        pane().navigate("/tmp")
+        waitRows()
+
+        mock.duplicateResult = { pending: true }
+        mock.calls = []
+        browser.findDuplicates(alpha)
+        verify(view.searching)
+        keyClick(Qt.Key_Escape)
+        compare(view.open, false)
+        compare(mock.called("cancel").args[0], 77, "closing stops the search")
+
+        mock.duplicateResult = { error: { code: "EINVAL", message: "this file is empty, so every empty file would match" } }
+        browser.findDuplicates(alpha)
+        tryCompare(view, "searching", false)
+        verify(view.error.indexOf("empty") > 0)
+        view.close()
+        mock.duplicateResult = null
+        mock.statItems = savedStat
+      }
+
       function test_9k_transcode() {
         waitRows()
         var png = Model.decodeEntry(["beta.png", "f", 10, 100, 420, null], "/tmp")
@@ -1980,6 +2188,7 @@ ShellRoot {
         var keys = browser.contextActions(pane().cursorEntry()).map(function (a) { return a.key })
         verify(keys.indexOf("trash") < 0 && keys.indexOf("delete") < 0 && keys.indexOf("paste") < 0 && keys.indexOf("properties") < 0)
         verify(keys.indexOf("editor") < 0, "no editor while picking")
+        verify(keys.indexOf("edittext") < 0 && keys.indexOf("duplicates") < 0, "no editing or duplicate finding while picking")
         var pngKeys = browser.contextActions(Model.decodeEntry(["beta.png", "f", 10, 100, 420, null], "/tmp")).map(function (a) { return a.key })
         verify(pngKeys.indexOf("transcode") < 0, "no transcoding while picking")
         verify(keys.indexOf("open") >= 0 && keys.indexOf("copy") >= 0)

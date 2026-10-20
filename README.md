@@ -15,6 +15,8 @@ A lightweight, fast file manager plugin for Omarchy running in the shell.
 * Background copy and move with persistent progress tracking
 * Freedesktop trash integration, compatible with GNOME Files, with Empty trash and Restore in the trash view
 * Recursive file search across directories
+* Find duplicate files and compare two copies side by side before trashing one
+* A simple built in text editor for config files, notes and scripts
 * Thumbnails in list, compact, grid and gallery view for images, videos, PDFs, office files and anything else your system has a thumbnailer for
 * Recent files, and bookmarks for the folders you use most
 * Connect to SMB, SFTP, WebDAV and other servers
@@ -112,6 +114,31 @@ Right click an archive and choose **Extract here** to extract it next to itself.
 To make an archive, select files or folders, right click and choose **Compress…**. Name it and pick a format: `.zip` opens anywhere, `.tar.xz` and `.tar.gz` suit Linux and macOS, and `.7z` is the smallest but needs 7-Zip on Windows. The archive is made next to the items, shows in the Transfers panel with a cancel button, and is selected when it is done. An existing file with the same name is never replaced: the new archive gets a number.
 
 Right click a picture or video, or several, and choose **Transcode…** to make a copy for sharing, with the same presets as Omarchy's `omarchy transcode`. Pictures become JPG or PNG at high (3160 px wide), medium (2160 px), low (1080 px) or their original size, turned the right way up and without their metadata, such as where a photo was taken. Videos become MP4 or GIF at 4K, 1080p, 720p or their original size, also without metadata. Original size keeps every pixel, except that a video's width and height are rounded down to even numbers, which MP4 needs. The copy is made next to each file as `name-size.format`, shows in the Transfers panel with a cancel button, and is selected when it is done. An existing file is never replaced: the copy gets a number. Unlike `omarchy transcode`, it does not replace your clipboard. Transcoding needs ImageMagick for pictures and `ffmpeg` for videos, which Omarchy installs.
+
+### Editing text
+
+Right click a text file and choose **Edit text**, or press Ctrl+E, to edit it inside Omafile without opening another app. It is meant for quick changes to config files, notes and scripts up to 1 MB.
+
+* Ctrl+S saves. A dot before the name means there are unsaved changes, and closing asks whether to save them.
+* Ctrl+Z and Ctrl+Shift+Z undo and redo, a word at a time. Ctrl+X, Ctrl+C and Ctrl+V cut, copy and paste.
+* Enter keeps the indentation of the line. Tab indents with the file's own style, tabs or spaces, and Tab or Shift+Tab on a selection indents or outdents every selected line.
+* Ctrl+F finds text. Enter or F3 goes to the next match and Shift+Enter or Shift+F3 to the previous one. A search in lower case ignores case.
+* Alt+Z, or the Wrap button, turns line wrapping on and off. PageUp and PageDown move a screen at a time.
+* Escape, Ctrl+W or the close button closes the editor.
+
+The file is saved exactly as you typed it, as UTF-8, keeping its Windows or Unix line endings and its byte order mark. Saving writes a new copy and swaps it in, so a crash halfway never leaves half a file, and the file keeps its permissions. A file with other hard links is written in place instead, so every name sees the change. If the file changed on disk since you opened it, saving asks whether to overwrite it or load the new version. Opening a link edits the file it points to. Files that are not UTF-8 text, that are bigger than 1 MB, that have a line over 20,000 characters, such as minified code, or that have stray carriage returns are not opened, because editing them inside the shell would be slow or would change them. Files you cannot write open read only. Omafile asks before it closes the editor with unsaved changes, but closing the window from Hyprland, or toggling the popup away with its key, closes it without asking.
+
+### Finding duplicates
+
+Right click a file and choose **Find duplicates…** to find other copies of it with exactly the same contents. Omafile looks through your home folder, or the file's own folder when it is outside your home; the menu at the top switches between the file's folder and your home folder. Right click a folder and choose **Find duplicates in this folder**, or right click empty space and choose **Find duplicates here**, to find every file in it that has a copy.
+
+Two copies show side by side with a preview, where each one is, its size and when it was changed, and the newest and oldest are marked. The file you picked, or the oldest copy, is on the left. Left and Right arrows, or the list below, choose which other copy is on the right. A folder search lists every file that has copies on the left, largest first; Up and Down move through them.
+
+* **Move to trash** trashes that copy. Delete trashes the copy on the right.
+* **Keep only this** keeps that copy and trashes every other one, after asking.
+* **Open** opens a copy, and **Show in folder** closes the finder and selects the copy in its folder.
+
+Everything goes to the trash, so Restore in the trash puts a copy back, and Ctrl+Z after closing the finder undoes the last trashing. Files count as duplicates only when every byte matches, not just the name or size. Empty files are not counted, hard links to the same file are counted once, hidden files and folders are skipped unless **Hidden files** is on, the trash is never searched, and the search stays on one drive. Escape or Stop ends a search early.
 
 ### Transfers
 
@@ -280,6 +307,7 @@ The context menu is a real focus target: arrows move through it, Enter or Space 
 | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy, cut and paste |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo and redo |
 | `F2` | Rename |
+| `Ctrl+E` | Edit a text file in Omafile |
 | `Ctrl+Shift+N` | New folder |
 | `Ctrl+N` | New file |
 | `Delete` | Move to trash, or delete permanently when already in the trash |

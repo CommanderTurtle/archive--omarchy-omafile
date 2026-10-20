@@ -363,7 +363,12 @@ Item {
   function close() {
     root.closeRequested()
   }
+  readonly property bool holdsUnsaved: textEditor.dirty
   function requestClose() {
+    if (textEditor.dirty) {
+      textEditor.requestClose()
+      return
+    }
     if (pickerRequest) answerPick({ ok: false })
     rememberSession()
     root.dismissRequested()
@@ -379,7 +384,7 @@ Item {
   readonly property int pickKeyDelay: 600
   readonly property var pickBlockedActions: ({
     cut: true, paste: true, rename: true, trash: true, delete: true, restore: true, emptytrash: true,
-    extract: true, compress: true, transcode: true, properties: true, newfile: true, terminal: true, agent: true,
+    extract: true, compress: true, transcode: true, edittext: true, duplicates: true, properties: true, newfile: true, terminal: true, agent: true,
     openwith: true, editor: true, undo: true, redo: true, drop: true, transfer: true,
     "place:emptytrash": true, "place:properties": true
   })
@@ -1189,6 +1194,40 @@ Item {
     if (popupMode) requestClose()
   }
 
+  function editText(entry) {
+    if (!entry || !service || !pickAllows("edittext")) return
+    if (!Model.textEditable(entry)) {
+      statusText = entry.isDir ? "Folders cannot be edited as text" : "Omafile only edits text files up to 1 MB"
+      return
+    }
+    closeMenu()
+    if (previewOpen) closePreview()
+    textEditor.openFile(entry.path, entry.name)
+  }
+
+  function findDuplicates(entry) {
+    if (!service || !pickAllows("duplicates")) return
+    var p = activePane()
+    closeMenu()
+    if (previewOpen) closePreview()
+    if (entry && !entry.isDir) {
+      var folder = Model.dirname(entry.path)
+      var look = home && Model.isWithin(entry.path, home) ? home : folder
+      duplicates.start(entry.path, look, p.showHidden)
+      return
+    }
+    duplicates.start("", entry && entry.isDir ? entry.path : (p.realPath || p.path), p.showHidden)
+  }
+
+  function revealFile(path) {
+    var p = activePane()
+    var folder = Model.dirname(path)
+    if (p.path !== folder) p.navigate(folder)
+    selectTimer.pendingName = Model.basename(path)
+    selectTimer.pendingPane = p
+    selectTimer.restart()
+  }
+
   property string editorPick: "omarchy"
   property bool editorPickAlso: false
   property string editorPickError: ""
@@ -1340,6 +1379,9 @@ Item {
       items.push({ key: "open", label: "Open", glyph: Icons.actionGlyph("open"), hint: "Enter" })
       items.push({ key: "openwith", label: "Open with", glyph: Icons.actionGlyph("open") })
       items.push({ key: "editor", label: "Open in editor", glyph: Icons.actionGlyph("editor") })
+      var inTrash = Model.isTrashPath(entry.path, trashRoot())
+      if (!inTrash && Model.textEditable(entry))
+        items.push({ key: "edittext", label: "Edit text", glyph: Icons.actionGlyph("rename"), hint: "Ctrl+E" })
       if (entry.isDir)
         items.push({ key: "opentab", label: "Open in new tab", glyph: Icons.actionGlyph("add"), hint: "Ctrl+Enter" })
       else
@@ -1360,6 +1402,9 @@ Item {
         items.push({ key: "compress", label: "Compress\u2026", glyph: Icons.actionGlyph("extract") })
       if (transcodeTargets(entry).length > 0)
         items.push({ key: "transcode", label: "Transcode\u2026", glyph: Icons.actionGlyph("transcode") })
+      if (!inTrash && !p.virtualView && (entry.isDir || (!entry.isBroken && (Number(entry.size) || 0) > 0)))
+        items.push({ key: "duplicates", label: entry.isDir ? "Find duplicates in this folder" : "Find duplicates\u2026",
+          glyph: Icons.actionGlyph("copy") })
       if (entry.isDir) {
         items.push({
           key: "bookmark",
@@ -1394,6 +1439,8 @@ Item {
         glyph: Icons.placeGlyph("pinned")
       })
       items.push({ key: "copypath", label: "Copy path", glyph: Icons.actionGlyph("copy") })
+      if (!p.virtualView && !paneInTrash(p))
+        items.push({ key: "duplicates", label: "Find duplicates here", glyph: Icons.actionGlyph("copy") })
       items.push({ key: "refresh", label: "Refresh", glyph: Icons.actionGlyph("refresh"), hint: "F5" })
       if (paneInTrash(p)) {
         separator()
@@ -1680,6 +1727,8 @@ Item {
     else if (key === "extract") extractArchives(archiveTargets(entry))
     else if (key === "compress") askCompress(entry)
     else if (key === "transcode") askTranscode(entry)
+    else if (key === "edittext") editText(entry)
+    else if (key === "duplicates") findDuplicates(entry)
     else if (key === "properties") showProperties(entry)
     else if (key === "newfolder") showDialog("newfolder", "New folder", "untitled folder", null)
     else if (key === "newfile") showDialog("newfile", "New file", "untitled", null)
@@ -2287,6 +2336,11 @@ Item {
       return true
     }
     if (confirm.opened) return confirm.handleKey(event)
+    if (textEditor.open) {
+      textEditor.focusEditor()
+      return true
+    }
+    if (duplicates.open) return duplicates.handleKey(event)
     if (dialogMode === "conflict") {
       if (Date.now() - conflictShownMs < conflictKeyDelay) return true
       if (event.key === Qt.Key_Escape) { resolveConflict("skip", false); return true }
@@ -2426,6 +2480,7 @@ Item {
     if (ctrl && event.key === Qt.Key_O) { openSelectedItems(); return true }
     if (ctrl && event.key === Qt.Key_T) { newTab(activeSide, null); return true }
     if (ctrl && event.key === Qt.Key_Period) { if (!p.virtualView && pickAllows("terminal")) service.openTerminal(p.path); return true }
+    if (ctrl && !shiftKey && !alt && event.key === Qt.Key_E) { editText(p.cursorEntry()); return true }
     if (ctrl && event.key === Qt.Key_W) { closeTab(activeSide, activeIndexFor(activeSide)); return true }
     if (ctrl && event.key === Qt.Key_Q) { requestClose(); return true }
     if (ctrl && event.key === Qt.Key_L) { pathBar.beginEdit(); return true }
@@ -3506,6 +3561,32 @@ Item {
             }
           }
         }
+      }
+    }
+
+    TextEditorView {
+      id: textEditor
+      service: root.service
+      home: root.home
+      onClosed: keyCatcher.forceActiveFocus()
+      onSavedFile: function (saved) {
+        var p = root.activePane()
+        if (p && p.path === Model.dirname(saved)) p.refresh()
+      }
+    }
+
+    DuplicatesView {
+      id: duplicates
+      service: root.service
+      home: root.home
+      thumbnails: root.boolSetting("thumbnails", true) && !root.picking
+      onClosed: keyCatcher.forceActiveFocus()
+      onOpenPath: function (path) {
+        if (root.service) root.service.openExternally(path)
+      }
+      onReveal: function (path) {
+        duplicates.close()
+        root.revealFile(path)
       }
     }
 
@@ -4709,6 +4790,7 @@ Item {
       { keys: "Ctrl+C / Ctrl+X / Ctrl+V", label: "Copy, cut and paste" },
       { keys: "Ctrl+Z / Ctrl+Shift+Z", label: "Undo and redo" },
       { keys: "F2", label: "Rename" },
+      { keys: "Ctrl+E", label: "Edit a text file in Omafile" },
       { keys: "Ctrl+Shift+N", label: "New folder" },
       { keys: "Ctrl+N", label: "New file" },
       { keys: "Delete", label: "Move to trash, or delete permanently inside the trash" },

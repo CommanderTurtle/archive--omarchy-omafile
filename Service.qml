@@ -556,8 +556,10 @@ Item {
     })
   }
 
-  function readClipboardText(onText) {
-    return request({ op: "cliptext" }, {
+  function readClipboardText(onText, limit) {
+    var body = { op: "cliptext" }
+    if (limit) body.limit = limit
+    return request(body, {
       onDone: function (m) { onText(String(m.text || "")) },
       onError: function () {}
     })
@@ -1168,6 +1170,30 @@ Item {
     next.push(record)
     transfers = next
     return id
+  }
+
+  function readText(path, onDone, onError) {
+    var reply = null
+    return request({ op: "readtext", path: String(path) }, {
+      onData: function (m) { if (m.t === "text") reply = m },
+      onDone: function () { if (reply && onDone) onDone(reply) },
+      onError: onError
+    })
+  }
+
+  function writeText(path, text, expect, force, crlf, bom, onDone, onError) {
+    return request({ op: "writetext", path: String(path), text: String(text), expect: expect || ({}),
+      force: force === true, crlf: crlf === true, bom: bom === true }, { onDone: onDone, onError: onError })
+  }
+
+  function findDuplicates(root, path, hidden, onProgress, onDone, onError) {
+    var body = { op: "duplicates", root: String(root), hidden: hidden === true }
+    if (path) body.path = String(path)
+    return request(body, {
+      onData: function (m) { if (m.t === "progress" && onProgress) onProgress(m) },
+      onDone: onDone,
+      onError: onError
+    })
   }
 
   function transcodePaths(paths, format, resolution, onDone, onError) {

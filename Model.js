@@ -343,6 +343,20 @@ function isArchive(entry) {
   return false;
 }
 
+var editLimit = 1024 * 1024;
+var notTextExtSet = toSet(['pdf', 'doc', 'docx', 'odt', 'ods', 'odp', 'xls', 'xlsx', 'ppt', 'pptx', 'epub',
+  'iso', 'img', 'dmg', 'exe', 'dll', 'so', 'o', 'a', 'bin', 'dat', 'db', 'sqlite', 'sqlite3', 'class', 'jar',
+  'pyc', 'deb', 'rpm', 'apk', 'msi', 'psd', 'xcf', 'blend', 'kra', 'ai', 'mobi', 'qcow2', 'vdi', 'wasm']);
+
+function textEditable(entry) {
+  if (!entry || entry.isDir || entry.isBroken) return false;
+  if (entry.kind !== undefined && entry.kind !== 'f' && entry.kind !== 'l') return false;
+  if ((Number(entry.size) || 0) > editLimit) return false;
+  var ext = String(entry.ext || '').toLowerCase();
+  return !imageExtSet[ext] && !videoExtSet[ext] && !audioExtSet[ext] && !archiveExtSet[ext]
+    && !fontExtSet[ext] && !notTextExtSet[ext];
+}
+
 var previewSides = [1024, 2048, 4096, 7680];
 var autoPreviewMax = 4096;
 

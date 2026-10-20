@@ -1909,6 +1909,267 @@ class OmarchyDefaultsTests(HelperTestCase):
         self.assertEqual(err["code"], "EINVAL")
 
 
+class TextFileTests(HelperTestCase):
+    def read(self, path):
+        msgs = self.helper.call({"id": self.next_id(), "op": "readtext", "path": path})
+        texts = [m for m in msgs if m["t"] == "text"]
+        return (texts[0] if texts else None), self.terminal(msgs)
+
+    def write(self, path, text, expect, **extra):
+        req = {"id": self.next_id(), "op": "writetext", "path": path, "text": text, "expect": expect}
+        req.update(extra)
+        return self.terminal(self.helper.call(req))
+
+    def test_text_is_read_with_its_line_endings_and_byte_order_mark_noted(self):
+        path = self.path("win.txt")
+        with open(path, "wb") as f:
+            f.write(b"\xef\xbb\xbfone\r\ntwo\r\n")
+        reply, done = self.read(path)
+        self.assertEqual(done["t"], "done")
+        self.assertEqual(reply["text"], "one\ntwo\n")
+        self.assertTrue(reply["crlf"])
+        self.assertTrue(reply["bom"])
+        result = self.write(path, reply["text"] + "three\n", reply, crlf=True, bom=True)
+        self.assertEqual(result["t"], "done")
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), b"\xef\xbb\xbfone\r\ntwo\r\nthree\r\n")
+
+    def test_binary_large_and_odd_files_are_refused(self):
+        with open(self.path("bin"), "wb") as f:
+            f.write(b"abc\0def")
+        self.assertEqual(self.read(self.path("bin"))[1]["code"], "EBINARY")
+        with open(self.path("latin1"), "wb") as f:
+            f.write(b"caf\xe9")
+        self.assertEqual(self.read(self.path("latin1"))[1]["code"], "EBINARY")
+        with open(self.path("big"), "wb") as f:
+            f.write(b"a" * ((1 << 20) + 1))
+        self.assertEqual(self.read(self.path("big"))[1]["code"], "EFBIG")
+        os.mkfifo(self.path("pipe"))
+        self.assertEqual(self.read(self.path("pipe"))[1]["code"], "EINVAL", "a pipe is never opened for reading")
+        self.assertEqual(self.read("relative.txt")[1]["code"], "EINVAL")
+
+    def test_a_link_is_edited_at_its_target_and_stays_a_link(self):
+        os.mkdir(self.path("real"))
+        target = self.path("real", "conf.txt")
+        with open(target, "w", encoding="utf-8") as f:
+            f.write("old\n")
+        os.symlink(target, self.path("link.txt"))
+        reply, _ = self.read(self.path("link.txt"))
+        self.assertEqual(reply["path"], target)
+        self.assertEqual(self.write(reply["path"], "new\n", reply)["t"], "done")
+        self.assertTrue(os.path.islink(self.path("link.txt")))
+        with open(self.path("link.txt"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "new\n")
+
+    def test_saving_keeps_the_permissions_and_never_follows_a_swapped_in_link(self):
+        path = self.path("script.sh")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("echo hi\n")
+        os.chmod(path, 0o750)
+        reply, _ = self.read(path)
+        self.assertEqual(self.write(path, "echo bye\n", reply)["t"], "done")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o750)
+        self.assertEqual(sorted(os.listdir(self.root)), ["script.sh"], "no temporary file is left behind")
+        reply, _ = self.read(path)
+        os.unlink(path)
+        secret = self.path("secret")
+        with open(secret, "w", encoding="utf-8") as f:
+            f.write("keep")
+        os.symlink(secret, path)
+        result = self.write(path, "pwned", reply, force=True)
+        self.assertEqual(result["code"], "EINVAL")
+        with open(secret, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "keep", "a link put in place of the file is never written through")
+
+    def test_a_file_changed_or_deleted_since_it_was_read_is_not_overwritten_unless_asked(self):
+        path = self.path("notes.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("mine\n")
+        reply, _ = self.read(path)
+        time.sleep(0.02)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("theirs\n")
+        result = self.write(path, "mine edited\n", reply)
+        self.assertEqual((result["code"], result["message"]), ("ECONFLICT", "changed"))
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "theirs\n")
+        self.assertEqual(self.write(path, "mine edited\n", reply, force=True)["t"], "done")
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "mine edited\n")
+        reply, _ = self.read(path)
+        os.unlink(path)
+        self.assertEqual(self.write(path, "back\n", reply)["message"], "deleted")
+        self.assertEqual(self.write(path, "back\n", reply, force=True)["t"], "done")
+        self.assertTrue(os.path.exists(path))
+
+    def test_a_hard_linked_file_is_written_in_place_so_every_name_sees_the_change(self):
+        path = self.path("a.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("shared\n")
+        os.link(path, self.path("b.txt"))
+        reply, _ = self.read(path)
+        self.assertEqual(self.write(path, "changed\n", reply)["t"], "done")
+        self.assertEqual(os.stat(path).st_ino, os.stat(self.path("b.txt")).st_ino)
+        with open(self.path("b.txt"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), "changed\n")
+
+    def test_text_that_is_not_valid_unicode_is_refused(self):
+        path = self.path("x.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("x")
+        reply, _ = self.read(path)
+        result = self.write(path, "bad \ud800 surrogate", reply)
+        self.assertEqual(result["code"], "EINVAL")
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "x")
+
+
+class EditorSafetyTests(HelperTestCase):
+    def test_a_file_with_stray_carriage_returns_is_not_opened(self):
+        path = self.path("odd.txt")
+        with open(path, "wb") as f:
+            f.write(b"PermitRootLogin yes\r\r\nnext\r\n")
+        result = self.terminal(self.helper.call({"id": self.next_id(), "op": "readtext", "path": path}))
+        self.assertEqual(result["code"], "EBINARY")
+        with open(path, "wb") as f:
+            f.write(b"old mac\rline")
+        result = self.terminal(self.helper.call({"id": self.next_id(), "op": "readtext", "path": path}))
+        self.assertEqual(result["code"], "EBINARY")
+
+    def test_a_file_with_a_line_too_long_to_edit_smoothly_is_not_opened(self):
+        path = self.path("min.json")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("{" + "a" * 20001 + "}")
+        result = self.terminal(self.helper.call({"id": self.next_id(), "op": "readtext", "path": path}))
+        self.assertEqual(result["code"], "ELONGLINE")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(("b" * 20000 + "\n") * 3)
+        result = self.terminal(self.helper.call({"id": self.next_id(), "op": "readtext", "path": path}))
+        self.assertEqual(result["t"], "done")
+
+    def test_links_are_followed_hop_by_hop_and_only_when_trusted(self):
+        helper = load_helper_module()
+        os.mkdir(self.path("d"))
+        target = self.path("d", "real.txt")
+        with open(target, "w", encoding="utf-8") as f:
+            f.write("x")
+        os.symlink("d/real.txt", self.path("hop2"))
+        os.symlink(self.path("hop2"), self.path("hop1"))
+        self.assertEqual(helper.resolve_trusted_leaf(helper.to_bytes(self.path("hop1"))),
+                         helper.to_bytes(os.path.realpath(target)))
+        helper.link_trusted = lambda *args: False
+        with self.assertRaises(OSError):
+            helper.resolve_trusted_leaf(helper.to_bytes(self.path("hop1")))
+        self.assertEqual(helper.resolve_trusted_leaf(helper.to_bytes(target)), helper.to_bytes(os.path.realpath(target)),
+                         "a plain file needs no trust")
+
+    def test_saving_drops_setuid_and_setgid(self):
+        path = self.path("tool")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+        os.chmod(path, 0o6755)
+        msgs = self.helper.call({"id": self.next_id(), "op": "readtext", "path": path})
+        reply = [m for m in msgs if m["t"] == "text"][0]
+        done = self.terminal(self.helper.call({"id": self.next_id(), "op": "writetext", "path": path,
+                                               "text": "#!/bin/sh\necho\n", "expect": reply}))
+        self.assertEqual(done["t"], "done")
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o755)
+        self.assertEqual(os.stat(path).st_gid, os.getgid())
+
+
+class DuplicateTests(HelperTestCase):
+    def find(self, root, path=None, hidden=False):
+        req = {"id": self.next_id(), "op": "duplicates", "root": root, "hidden": hidden}
+        if path is not None:
+            req["path"] = path
+        return self.terminal(self.helper.call(req))
+
+    def put(self, name, data):
+        full = self.path(*name.split("/"))
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with open(full, "wb") as f:
+            f.write(data)
+        return full
+
+    def names(self, group):
+        return [os.path.relpath(i["path"], self.root) for i in group["items"]]
+
+    def test_copies_of_a_file_are_found_and_lookalikes_are_not(self):
+        blob = os.urandom(300000)
+        target = self.put("photo.jpg", blob)
+        self.put("backup/photo (1).jpg", blob)
+        self.put("backup/deep/again.jpg", blob)
+        changed = bytearray(blob)
+        changed[150000] ^= 1
+        self.put("backup/edited.jpg", bytes(changed))
+        self.put(".cache/hidden.jpg", blob)
+        os.link(target, self.path("hardlink.jpg"))
+        os.symlink(target, self.path("link.jpg"))
+        result = self.find(self.root, target)
+        self.assertEqual(result["t"], "done")
+        self.assertEqual(len(result["groups"]), 1)
+        self.assertEqual(self.names(result["groups"][0]), ["photo.jpg", "backup/deep/again.jpg", "backup/photo (1).jpg"],
+                         "the picked file comes first; a file that differs only in the middle, a hard link and a link are left out")
+        with_hidden = self.find(self.root, target, hidden=True)
+        self.assertIn(".cache/hidden.jpg", self.names(with_hidden["groups"][0]))
+
+    def test_the_picked_file_counts_even_inside_a_skipped_hidden_folder(self):
+        blob = os.urandom(5000)
+        target = self.put(".config/a.txt", blob)
+        self.put("copy.txt", blob)
+        result = self.find(self.root, target)
+        self.assertEqual(self.names(result["groups"][0]), [".config/a.txt", "copy.txt"])
+
+    def test_a_folder_search_groups_every_duplicate_biggest_waste_first(self):
+        small = os.urandom(10)
+        big = os.urandom(200000)
+        self.put("s1", small)
+        self.put("sub/s2", small)
+        self.put("sub/s3", small)
+        self.put("b1", big)
+        self.put("sub/b2", big)
+        self.put("alone", os.urandom(10))
+        self.put("empty1", b"")
+        self.put("empty2", b"")
+        trash = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share"), "Trash")
+        result = self.find(self.root)
+        sizes = [g["size"] for g in result["groups"]]
+        self.assertEqual(sizes, [200000, 10])
+        self.assertEqual(sorted(self.names(result["groups"][1])), ["s1", "sub/s2", "sub/s3"])
+        self.assertEqual(result["scanned"], 6, "empty files are not counted as duplicates of each other")
+
+    def test_trash_folders_are_never_searched_and_items_carry_their_identity(self):
+        blob = os.urandom(4000)
+        target = self.put("a.bin", blob)
+        self.put(".Trash-1000/files/a.bin", blob)
+        self.put(".Trash/a.bin", blob)
+        self.put("b.bin", blob)
+        result = self.find(self.root, target, hidden=True)
+        self.assertEqual(self.names(result["groups"][0]), ["a.bin", "b.bin"])
+        item = result["groups"][0]["items"][0]
+        self.assertEqual((item["ino"], item["dev"]), (os.stat(target).st_ino, os.stat(target).st_dev))
+
+    def test_a_very_deep_tree_stops_and_says_so(self):
+        blob = os.urandom(4000)
+        target = self.put("a.bin", blob)
+        deep = self.root
+        for i in range(70):
+            deep = os.path.join(deep, "d")
+        os.makedirs(deep)
+        with open(os.path.join(deep, "copy.bin"), "wb") as f:
+            f.write(blob)
+        result = self.find(self.root, target)
+        self.assertEqual(result["groups"], [])
+        self.assertTrue(result["truncated"])
+
+    def test_bad_requests_and_empty_files_are_refused(self):
+        empty = self.put("empty", b"")
+        self.assertEqual(self.find(self.root, empty)["code"], "EINVAL")
+        self.assertEqual(self.find("relative")["code"], "EINVAL")
+        self.assertEqual(self.find(self.root, self.root)["code"], "EINVAL")
+        self.assertEqual(self.find(empty)["code"], "ENOTDIR")
+
+
 class MountableDeviceTests(unittest.TestCase):
     def load_helper(self):
         import importlib.util

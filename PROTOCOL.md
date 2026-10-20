@@ -228,8 +228,50 @@ Every read has a 3 second limit. A file list over 1 MB or 20,000 paths fails wit
 ```
 
 Replies `done` with `text`, the clipboard's plain text, for pasting into a text field.
-At most 64 KB; more fails with `E2BIG`. Text fields never read the clipboard through
+At most 64 KB, or `limit` bytes up to 1 MB when given, which the text editor uses; more
+fails with `E2BIG`. Text fields never read the clipboard through
 Qt, so this is the only path clipboard text takes into the shell.
+
+### readtext, writetext
+
+```
+{"id": N, "op": "readtext", "path": "/home/me/.bashrc"}
+{"id": N, "op": "writetext", "path": P, "text": T, "expect": {"ino", "dev", "mtimeNs", "size"}, "force": false, "crlf": false, "bom": false}
+```
+
+`readtext` follows links to the real file, opens it with `O_NOFOLLOW` through a safe parent
+handle, and replies `{"t": "text", "text", "path", "crlf", "bom", "writable", "ino", "dev",
+"mtimeNs", "size"}` then `done`. `path` is the real file. Windows line endings become `\n`, with
+`crlf` true when most lines had them, and a UTF-8 byte order mark is removed and reported in `bom`.
+`ino`, `dev` and `mtimeNs` are strings. Errors: `EINVAL` for anything but a regular file,
+`EFBIG` over 1 MB, `ELONGLINE` for a line over 20,000 characters, and `EBINARY` for a file with a NUL
+byte, that is not UTF-8, or that has a carriage return outside a Windows line ending.
+
+`writetext` saves `text` as UTF-8 to `path`, turning `\n` back into `\r\n` when `crlf` is set and
+adding the byte order mark when `bom` is set. Unless `force` is set, the file must still be the
+one `expect` describes, or it fails with `ECONFLICT` and `message` `changed` or `deleted`. A file
+you own with one link is replaced: the text goes to a new temporary file in the same folder with
+the old permissions and group, is synced, and is renamed over the old one. A file with more links, or one you
+do not own, is overwritten in place. A link or anything else that is not a regular file is
+refused with `EINVAL`, even with `force`. Replies `done` with the new `ino`, `dev`, `mtimeNs` and
+`size`. Text over 8 MB, or text that cannot be UTF-8, fails with `EFBIG` or `EINVAL`.
+
+### duplicates
+
+```
+{"id": N, "op": "duplicates", "root": "/home/me", "path": "/home/me/photo.jpg", "hidden": false}
+```
+
+Cancellable. Walks `root` without following links or leaving its drive, skipping the trash, and
+hidden files and folders unless `hidden` is set. With `path`, it finds copies of that file;
+without it, every group of identical files. Files are compared by size, then by a BLAKE2 hash of
+their first and last 64 KB, then by a hash of every byte, each read with `O_NOFOLLOW`. Empty files
+never match, and hard links to one file count once. Emits `{"t": "progress", "phase", "files",
+"current", "done", "total"}` with `phase` `looking` or `comparing` about three times a second.
+Replies `done` with `groups`, each `{"size", "items": [{"path", "mtime", "size"}]}`, the picked
+file first or else oldest first, groups with the most space to free first, plus `scanned` and
+`truncated`, which is set after 300,000 candidate files or 2,000 groups. Errors: `EINVAL`, for
+example for an empty `path`, `ENOTDIR`, and `ECANCELED`.
 
 ### samedev
 

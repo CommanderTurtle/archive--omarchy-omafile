@@ -787,6 +787,47 @@ test('expandFieldCodes quotes the path inside a shell script argument', function
   assert.deepEqual(expand(['app', '-c', 'x %f'], '/tmp/a b'), ['app', '-c', 'x /tmp/a b']);
 });
 
+test('transcodeKind sorts pictures and videos by extension and skips everything else', function () {
+  assert.equal(Model.transcodeKind({ name: 'IMG_1.HEIC' }), 'picture');
+  assert.equal(Model.transcodeKind({ name: 'shot.png' }), 'picture');
+  assert.equal(Model.transcodeKind({ name: 'clip.MOV' }), 'video');
+  assert.equal(Model.transcodeKind({ name: 'drawing.svg' }), '', 'vector images are never transcoded');
+  assert.equal(Model.transcodeKind({ name: 'notes.txt' }), '');
+  assert.equal(Model.transcodeKind({ name: 'photos.png', isDir: true }), '');
+  assert.equal(Model.transcodeKind({ name: 'gone.mp4', isBroken: true }), '');
+  assert.equal(Model.transcodeKind(null), '');
+});
+
+function expandMulti(command, paths) {
+  return Array.prototype.slice.call(Model.expandFieldCodesMulti(command, paths)).map(function (argv) {
+    return Array.prototype.slice.call(argv);
+  });
+}
+
+test('expandFieldCodesMulti launches a file list app once with every file', function () {
+  assert.deepEqual(expandMulti(['imv', '%F'], ['/a.png', '/b.png']), [['imv', '/a.png', '/b.png']]);
+  assert.deepEqual(expandMulti(['viewer', '--new', '%U', '--end'], ['/a', '/b']), [['viewer', '--new', '/a', '/b', '--end']]);
+  assert.deepEqual(expandMulti(['app', '%F', '%%'], ['/a', '/b']), [['app', '/a', '/b', '%']]);
+});
+
+test('expandFieldCodesMulti launches a single file app once per file', function () {
+  assert.deepEqual(expandMulti(['mpv', '%f'], ['/a.mp3', '/b.mp3']), [['mpv', '/a.mp3'], ['mpv', '/b.mp3']]);
+  assert.deepEqual(expandMulti(['app'], ['/a', '/b']), [['app', '/a'], ['app', '/b']]);
+  assert.deepEqual(expandMulti(['app', '%F', '%f'], ['/a', '/b']), [['app', '/a', '/a'], ['app', '/b', '/b']]);
+  assert.deepEqual(expandMulti(['app', '--files=%F'], ['/a', '/b']), [['app', '--files=/a'], ['app', '--files=/b']]);
+});
+
+test('expandFieldCodesMulti quotes every file inside a shell script argument', function () {
+  assert.deepEqual(expandMulti(['sh', '-c', 'feh %F'], ["/tmp/a'b", '/tmp/$(id)']),
+    [['sh', '-c', "feh '/tmp/a'\\''b' '/tmp/$(id)'"]]);
+});
+
+test('expandFieldCodesMulti matches expandFieldCodes for one file and does nothing for none', function () {
+  assert.deepEqual(expandMulti(['imv', '%F'], ['/a.png']), [['imv', '/a.png']]);
+  assert.deepEqual(expandMulti(['imv', '%F'], []), []);
+  assert.deepEqual(expandMulti([], ['/a', '/b']), []);
+});
+
 test('isWithin matches a folder and what is inside it, never a sibling with the same prefix', function () {
   assert.equal(Model.isWithin('/mnt/nas/a.mp3', '/mnt/nas'), true);
   assert.equal(Model.isWithin('/mnt/nas', '/mnt/nas/'), true);

@@ -158,12 +158,23 @@ QtObject {
   function setDefaultApp(path, desktopId) { record("setDefaultApp", [path, desktopId]) }
   function runCommandOn(text, path) { record("runCommandOn", [text, path]); return true }
   function openExternally(path) { record("openExternally", [path]) }
+  function openExternallyFiles(paths) { record("openExternallyFiles", [paths]) }
+  function appCommand(app) {
+    var exec = Model.tokenizeCommand(String((app && app.execString) || ""))
+    return exec.length > 0 ? exec : Array.prototype.slice.call((app && app.command) || [])
+  }
   property bool agentAvailable: false
   property string agentName: "Claude Code"
   function openEditor(path) { record("openEditor", [path]) }
   function openAgent(path) { record("openAgent", [path]) }
   property var compressResult: null
   function makeDirectory(path, onDone, onError) { record("makeDirectory", [path]); if (onDone) onDone({}) }
+  property var transcodeResult: null
+  function transcodePaths(paths, format, resolution, onDone, onError) {
+    record("transcodePaths", [paths, format, resolution])
+    if (transcodeResult && transcodeResult.error) { if (onError) onError({ message: transcodeResult.error, code: transcodeResult.code }) }
+    else if (onDone) onDone({ outputs: paths.map(function (p) { return p.replace(/\.[^.\/]+$/, "-" + resolution + "." + format) }), failures: [] })
+  }
   function compressPaths(paths, name, onDone, onError) {
     record("compressPaths", [paths, name])
     if (compressResult && compressResult.error) { if (onError) onError({ message: compressResult.error, code: compressResult.code }) }
@@ -176,7 +187,8 @@ QtObject {
     if (out && out.error) { if (onError) onError({ message: out.error }) }
     else if (onDone) onDone({ path: out ? out.path : path.replace(/\.zip$/, "") })
   }
-  function thumbnailFor(path, mtime, bucket, onReady) { record("thumbnailFor", [path, mtime, bucket]); onReady(""); return null }
+  property string thumbResult: ""
+  function thumbnailFor(path, mtime, bucket, onReady) { record("thumbnailFor", [path, mtime, bucket]); onReady(thumbResult); return null }
   function releaseThumbnail(ticket) {}
   function finishPick(result, request) { record("finishPick", [result, request]); pickRequest = null }
   property var systemClipboard: null

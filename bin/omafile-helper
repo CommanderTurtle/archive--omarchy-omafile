@@ -2140,10 +2140,43 @@ PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 PIXEL_CHUNKS = frozenset([b"IHDR", b"PLTE", b"tRNS", b"IDAT", b"IEND", b"gAMA", b"sRGB", b"cHRM", b"sBIT"])
 THUMB_TEXT_LIMIT = 16384
 THUMB_MAX_SIDE = max(size for _, size in THUMB_BUCKETS)
+PREVIEW_BUCKET = "preview"
+PREVIEW_SIDE = 2048
+PREVIEW_MAX_READ = 48 * 1024 * 1024
+PREVIEW_KEEP = 200
 
 def thumb_root():
     base = os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache")
     return os.path.join(base, "thumbnails")
+
+def preview_root():
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache")
+    return os.path.join(base, "omafile", "previews")
+
+def thumb_place(root, bucket):
+    if bucket == PREVIEW_BUCKET:
+        return preview_root(), PREVIEW_SIDE, PREVIEW_MAX_READ
+    return os.path.join(root, bucket), THUMB_BUCKET_SIZES[bucket], THUMB_MAX_READ
+
+def prune_previews(folder, keep):
+    try:
+        names = [n for n in os.listdir(folder) if n.endswith(".png") and not n.startswith(".")]
+    except OSError:
+        return
+    if len(names) <= keep:
+        return
+    stamped = []
+    for name in names:
+        try:
+            stamped.append((os.lstat(os.path.join(folder, name)).st_mtime, name))
+        except OSError:
+            continue
+    stamped.sort()
+    for _, name in stamped[:max(0, len(stamped) - keep)]:
+        try:
+            os.unlink(os.path.join(folder, name))
+        except OSError:
+            pass
 
 def thumb_uri(path_bytes):
     return "file://" + urllib.parse.quote(path_bytes, safe=THUMB_URI_SAFE)
@@ -2348,15 +2381,15 @@ def blank_png():
     pixels = zlib.compress(b"\x00\x00\x00\x00\x00")
     return [(b"IHDR", header), (b"IDAT", pixels), (b"IEND", b"")]
 
-def thumb_matches(path, uri, mtime):
+def thumb_matches(path, uri, mtime, max_side=THUMB_MAX_SIDE, max_read=THUMB_MAX_READ):
     try:
-        if os.path.getsize(path) > THUMB_MAX_READ:
+        if os.path.getsize(path) > max_read:
             return False
         with open(path, "rb") as f:
-            chunks = png_chunks(f.read())
+            chunks = png_chunks(f.read(max_read))
     except OSError:
         return False
-    if not chunks or not safe_thumb(chunks):
+    if not chunks or not safe_thumb(chunks, max_side):
         return False
     meta = png_text(chunks)
     if meta.get("Thumb::URI") != uri:
@@ -2367,6 +2400,9 @@ def thumb_matches(path, uri, mtime):
         return False
 
 def find_thumb(root, name, uri, mtime, bucket):
+    if bucket == PREVIEW_BUCKET:
+        candidate = os.path.join(preview_root(), name)
+        return candidate if thumb_matches(candidate, uri, mtime, PREVIEW_SIDE, PREVIEW_MAX_READ) else None
     start = [b for b, _ in THUMB_BUCKETS].index(bucket)
     for folder, _ in THUMB_BUCKETS[start:]:
         candidate = os.path.join(root, folder, name)
@@ -2461,8 +2497,7 @@ def acquire_thumb_worker(cancel_event):
     return False
 
 def generate_thumb(root, name, src, uri, st, bucket, command, mime, cancel_event):
-    size = THUMB_BUCKET_SIZES[bucket]
-    folder = os.path.join(root, bucket)
+    folder, size, max_read = thumb_place(root, bucket)
     private_makedirs(folder)
     fd, out = tempfile.mkstemp(prefix=".omafile-", suffix=".png", dir=folder)
     os.close(fd)
@@ -2475,15 +2510,17 @@ def generate_thumb(root, name, src, uri, st, bucket, command, mime, cancel_event
             return status
         try:
             with open(out, "rb") as f:
-                chunks = png_chunks(f.read(THUMB_MAX_READ))
+                chunks = png_chunks(f.read(max_read))
         except OSError:
             chunks = None
-        if not chunks or png_size(chunks) is None or max(png_size(chunks)) > THUMB_MAX_SIDE:
+        if not chunks or png_size(chunks) is None or max(png_size(chunks)) > size:
             return "failed"
         fields = {"Thumb::URI": uri, "Thumb::MTime": str(int(st.st_mtime)),
                   "Thumb::Size": str(st.st_size), "Thumb::Mimetype": mime,
                   "Software": "Omafile " + VERSION}
         write_png(os.path.join(folder, name), chunks, fields)
+        if bucket == PREVIEW_BUCKET:
+            prune_previews(folder, PREVIEW_KEEP)
         return "ok"
     finally:
         try:
@@ -2495,7 +2532,7 @@ def op_thumb(req, cancel_event):
     req_id = req["id"]
     path = req.get("path")
     bucket = req.get("size")
-    if bucket not in THUMB_BUCKET_SIZES:
+    if bucket not in THUMB_BUCKET_SIZES and bucket != PREVIEW_BUCKET:
         bucket = "large"
     if not isinstance(path, str) or not path.startswith("/"):
         send_error(req_id, "EINVAL", "absolute path required")
@@ -2511,7 +2548,7 @@ def op_thumb(req, cancel_event):
         return
     root = thumb_root()
     real = os.path.realpath(src)
-    if real.startswith(to_bytes(root) + b"/"):
+    if real.startswith(to_bytes(root) + b"/") or real.startswith(to_bytes(preview_root()) + b"/"):
         send_error(req_id, "EUNSUPPORTED", "file is inside the thumbnail cache", path)
         return
     uri = thumb_uri(src)
@@ -2544,7 +2581,7 @@ def op_thumb(req, cancel_event):
                 if status == "cancelled":
                     send_error(req_id, "ECANCELED", "cancelled")
                     return
-                if status == "failed":
+                if status == "failed" and bucket != PREVIEW_BUCKET:
                     try:
                         marker = os.path.join(root, "fail", "omafile-" + VERSION, name)
                         write_png(marker, blank_png(), {"Thumb::URI": uri, "Thumb::MTime": str(mtime),
@@ -2554,7 +2591,7 @@ def op_thumb(req, cancel_event):
                 if status != "ok":
                     send_error(req_id, "EUNSUPPORTED", "thumbnailer " + status, path)
                     return
-                found = os.path.join(root, bucket, name)
+                found = os.path.join(thumb_place(root, bucket)[0], name)
     emit({"id": req_id, "t": "thumb", "thumb": found})
     send_done(req_id)
 
@@ -4301,6 +4338,154 @@ def op_compress(req, cancel_event):
         os.close(pfd)
 
 
+TRANSCODE_TIMEOUT = 6 * 3600.0
+TRANSCODE_PICTURE_SIZES = {"high": "3160x>", "medium": "2160x>", "low": "1080x>"}
+TRANSCODE_VIDEO_SIZES = {"4k": 2160, "1080p": 1080, "720p": 720}
+TRANSCODE_FORMATS = {"picture": ("jpg", "png"), "video": ("mp4", "gif")}
+TRANSCODE_DEMUXERS = "mov,matroska,avi,mpegts,flv,mpeg"
+TRANSCODE_IMAGE_LIMITS = ["-limit", "memory", "1GiB", "-limit", "map", "2GiB", "-limit", "disk", "4GiB",
+                          "-limit", "area", "256MP", "-limit", "time", "900"]
+HEIF_BRANDS = {b"heic": "HEIC", b"heix": "HEIC", b"hevc": "HEIC", b"hevx": "HEIC", b"heim": "HEIC",
+               b"heis": "HEIC", b"mif1": "HEIC", b"msf1": "HEIC", b"avif": "AVIF", b"avis": "AVIF"}
+
+
+def media_kind(head):
+    if head.startswith(PNG_MAGIC):
+        return "picture", "PNG"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "picture", "JPEG"
+    if head[:6] in (b"GIF87a", b"GIF89a"):
+        return "picture", "GIF"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "picture", "WEBP"
+    if head[:4] in (b"II*\0", b"MM\0*"):
+        return "picture", "TIFF"
+    if head[:2] == b"BM":
+        return "picture", "BMP"
+    if head[4:8] == b"ftyp":
+        brand = head[8:12]
+        if brand in HEIF_BRANDS:
+            return "picture", HEIF_BRANDS[brand]
+        return "video", None
+    if head[:4] == b"\x1aE\xdf\xa3" or (head[:4] == b"RIFF" and head[8:12] == b"AVI ") or head[:3] == b"FLV":
+        return "video", None
+    if head[:4] == b"\0\0\1\xba" or (len(head) > 188 and head[0] == 0x47 and head[188] == 0x47):
+        return "video", None
+    return None, None
+
+
+def transcode_argv(kind, coder, fmt, resolution, in_fd, out_fd, programs):
+    source = "/proc/self/fd/%d" % in_fd
+    target = "/proc/self/fd/%d" % out_fd
+    if kind == "picture":
+        argv = [programs["magick"]] + TRANSCODE_IMAGE_LIMITS + [
+            "%s:%s[0]" % (coder, source), "-auto-orient", "-resize", TRANSCODE_PICTURE_SIZES[resolution]]
+        if fmt == "jpg":
+            return argv + ["-quality", "85", "-strip", "JPEG:" + target]
+        return argv + ["-strip", "-define", "png:compression-filter=5", "-define", "png:compression-level=9",
+                       "-define", "png:compression-strategy=1", "-define", "png:exclude-chunk=all", "PNG:" + target]
+    scale = "scale=-2:%d" % TRANSCODE_VIDEO_SIZES[resolution]
+    argv = [programs["ffmpeg"], "-nostdin", "-v", "error", "-protocol_whitelist", "file",
+            "-format_whitelist", TRANSCODE_DEMUXERS, "-i", source, "-map_metadata", "-1", "-map_chapters", "-1"]
+    if fmt == "gif":
+        return argv + ["-vf", "fps=10,%s:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" % scale,
+                       "-f", "gif", "-y", target]
+    if resolution == "4k":
+        codec = ["-c:v", "libx265", "-preset", "slow", "-crf", "24"]
+    else:
+        codec = ["-c:v", "libx264", "-preset", "fast", "-crf", "23"]
+    return argv + ["-vf", scale] + codec + ["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart",
+                                             "-f", "mp4", "-y", target]
+
+
+def transcode_one(path, fmt, resolution, programs, cancel_event):
+    pfd, leaf = open_parent_safely(to_bytes(path))
+    in_fd = None
+    out_fd = None
+    work = None
+    try:
+        in_fd = os.open(leaf, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=pfd)
+        if not stat.S_ISREG(os.fstat(in_fd).st_mode):
+            raise ValueError("not a regular file")
+        os.set_blocking(in_fd, True)
+        kind, coder = media_kind(os.pread(in_fd, 512, 0))
+        if kind is None:
+            raise ValueError("not a picture or video")
+        if fmt not in TRANSCODE_FORMATS[kind]:
+            raise ValueError("a %s cannot be made into %s" % (kind, fmt))
+        if (kind == "picture") != (resolution in TRANSCODE_PICTURE_SIZES):
+            raise ValueError("%s is not a %s size" % (resolution, kind))
+        if programs.get("magick" if kind == "picture" else "ffmpeg") is None:
+            raise FileNotFoundError(errno.ENOENT, "%s is not installed" % ("ImageMagick" if kind == "picture" else "ffmpeg"))
+        while True:
+            work = b".omafile-transcode-" + os.urandom(6).hex().encode() + b"." + fmt.encode()
+            try:
+                out_fd = os.open(work, os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=pfd)
+                break
+            except FileExistsError:
+                continue
+        argv = transcode_argv(kind, coder, fmt, resolution, in_fd, out_fd, programs)
+        code, _ = run_media(argv, (in_fd, out_fd), cancel_event, TRANSCODE_TIMEOUT, limit=0)
+        if code is None:
+            return None
+        if code != 0 or os.fstat(out_fd).st_size == 0:
+            raise ValueError("could not transcode this file")
+        stem = os.path.splitext(to_str(leaf))[0] or to_str(leaf)
+        final = place_unique(work, pfd, to_bytes("%s-%s.%s" % (stem, resolution, fmt)), pfd)
+        work = None
+        return to_str(os.path.join(os.path.dirname(to_bytes(os.path.normpath(path))), final))
+    finally:
+        for fd in (in_fd, out_fd):
+            if fd is not None:
+                os.close(fd)
+        if work is not None:
+            try:
+                os.unlink(work, dir_fd=pfd)
+            except OSError:
+                pass
+        os.close(pfd)
+
+
+def op_transcode(req, cancel_event):
+    req_id = req["id"]
+    paths = req.get("paths")
+    fmt = req.get("format")
+    resolution = req.get("resolution")
+    if (not isinstance(paths, list) or not paths or not all(isinstance(p, str) and os.path.isabs(p) for p in paths)
+            or fmt not in ("jpg", "png", "mp4", "gif")
+            or resolution not in TRANSCODE_PICTURE_SIZES and resolution not in TRANSCODE_VIDEO_SIZES):
+        send_error(req_id, "EINVAL", "absolute paths, a format and a size are required")
+        return
+    programs = {}
+    for name in ("magick", "ffmpeg"):
+        try:
+            programs[name] = trusted_program(name)
+        except FileNotFoundError:
+            programs[name] = None
+    outputs = []
+    failures = []
+    for index, path in enumerate(paths):
+        if cancel_event.is_set():
+            break
+        emit({"id": req_id, "t": "progress", "files": index, "filesTotal": len(paths), "current": path})
+        try:
+            made = transcode_one(path, fmt, resolution, programs, cancel_event)
+        except (OSError, ValueError) as e:
+            failures.append({"path": path, "message": str(getattr(e, "strerror", None) or e)})
+            continue
+        if made is None:
+            break
+        outputs.append(made)
+    if cancel_event.is_set():
+        send_error(req_id, "ECANCELED", "stopped", paths[0])
+        return
+    emit({"id": req_id, "t": "progress", "files": len(paths), "filesTotal": len(paths), "current": ""})
+    if not outputs:
+        send_error(req_id, "EFAIL", failures[0]["message"] if failures else "nothing was transcoded", paths[0])
+        return
+    send_done(req_id, outputs=outputs, failures=failures)
+
+
 CANCELLABLE_OPS = {
     "list": op_list,
     "search": op_search,
@@ -4319,6 +4504,7 @@ CANCELLABLE_OPS = {
     "counts": op_counts,
     "extract": op_extract,
     "compress": op_compress,
+    "transcode": op_transcode,
 }
 
 SIMPLE_OPS = {

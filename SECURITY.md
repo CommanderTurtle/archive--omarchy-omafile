@@ -30,6 +30,7 @@ Only the latest release on `main` receives fixes.
 | Portal preference | `~/.config/xdg-desktop-portal/hyprland-portals.conf` | Only while Pick files for other apps is on. One `org.freedesktop.impl.portal.FileChooser=omafile` line, the rest of the file is kept |
 | Clipboard | `wl-copy`, `wl-paste` | Written when you choose Copy path, or copy or cut files. Read when you paste files, images, or text into a text field, and once per second while cut markers are active. Every read goes through the helper with a time limit and a size cap (1 MB of file list and 20,000 paths, 64 KB of text), never through Qt |
 | Thumbnails | `~/.cache/thumbnails` (or `$XDG_CACHE_HOME/thumbnails`) | Shared PNG cache, including source URIs and timestamps; may remain after source files are moved or deleted |
+| Sharper image previews | `~/.cache/omafile/previews` (or `$XDG_CACHE_HOME/omafile/previews`) | Up to 2048 px PNG previews, only when Sharper image previews is on. Private to you, with the same pixel-only checks as thumbnails, and the oldest are removed beyond 200 |
 | Audio preview copies | `~/.cache/omafile/preview` (or `$XDG_CACHE_HOME/omafile/preview`) | The audio stream of the last one or two previewed songs, without cover art or tags. Private to you and replaced as you preview more |
 
 ## Processes Omafile runs
@@ -40,6 +41,7 @@ Only the latest release on `main` receives fixes.
 | `bin/omafile-filemanager1` | Only while Default file manager is on. Started by D-Bus when another app asks to show a file, exits after two idle minutes |
 | System thumbnailers | Automatically while browsing with thumbnails enabled, including for images and the image preview. Root-owned definitions in `/usr/share/thumbnailers` and `/usr/local/share/thumbnailers` only; no user or XDG-supplied definitions |
 | `ffprobe`, `ffmpeg` | Only when you preview an audio file, to read its title, artist and album and to copy its audio stream without anything else |
+| `magick`, `ffmpeg` | Only when you choose Transcode. The helper opens each file as a handle and checks its first bytes, so only real pictures and videos are passed on, whatever their name. ImageMagick is told the exact picture format, so it never runs its script, text or vector readers on a file, and has memory, size and time limits. `ffmpeg` may only read local files and only through plain video container demuxers (`mov`, `matroska`, `avi`, `mpegts`, `flv`, `mpeg`), never playlists or concat lists that could pull other files into the result. Both write to a new temporary file that is linked into place without replacing anything, and metadata is removed |
 | `lsblk`, `findmnt` | Listing drives, every 15 seconds while the shell runs |
 | `gio open` | Opening a file with its default application |
 | `gio mount` | Connecting to or disconnecting from a network server |

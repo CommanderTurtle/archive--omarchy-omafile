@@ -5,6 +5,7 @@ import os
 import queue
 import shutil
 import stat
+import struct
 import pwd
 import grp
 import subprocess
@@ -15,6 +16,7 @@ import time
 import unittest
 import urllib.parse
 import zipfile
+import zlib
 
 HELPER_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "omafile-helper")
 
@@ -1664,6 +1666,89 @@ class DirsDrivesTests(HelperTestCase):
             err = self.terminal(msgs)
             self.assertEqual(err["t"], "error")
             self.assertEqual(err["code"], "EINVAL")
+
+class TranscodeTests(HelperTestCase):
+    def test_media_is_recognised_by_its_first_bytes_not_its_name(self):
+        helper = load_helper_module()
+        self.assertEqual(helper.media_kind(helper.PNG_MAGIC + b"rest"), ("picture", "PNG"))
+        self.assertEqual(helper.media_kind(b"\xff\xd8\xff\xe0rest"), ("picture", "JPEG"))
+        self.assertEqual(helper.media_kind(b"RIFF\0\0\0\0WEBPVP8 "), ("picture", "WEBP"))
+        self.assertEqual(helper.media_kind(b"\0\0\0\x18ftypheic\0\0\0\0"), ("picture", "HEIC"))
+        self.assertEqual(helper.media_kind(b"\0\0\0\x18ftypavif\0\0\0\0"), ("picture", "AVIF"))
+        self.assertEqual(helper.media_kind(b"\0\0\0\x18ftypisom\0\0\0\0"), ("video", None))
+        self.assertEqual(helper.media_kind(b"\x1aE\xdf\xa3rest"), ("video", None))
+        self.assertEqual(helper.media_kind(b"push graphic-context\nimage over 0,0 0,0 '/etc/hostname'"), (None, None))
+        self.assertEqual(helper.media_kind(b"#EXTM3U\nfile:///etc/hostname\n"), (None, None))
+        self.assertEqual(helper.media_kind(b"<svg xmlns='http://www.w3.org/2000/svg'/>"), (None, None))
+
+    def test_pictures_pin_their_decoder_and_videos_allow_only_container_demuxers(self):
+        helper = load_helper_module()
+        programs = {"magick": "/usr/bin/magick", "ffmpeg": "/usr/bin/ffmpeg"}
+        picture = helper.transcode_argv("picture", "PNG", "jpg", "medium", 5, 6, programs)
+        self.assertIn("PNG:/proc/self/fd/5[0]", picture)
+        self.assertEqual(picture[-1], "JPEG:/proc/self/fd/6")
+        self.assertIn("-strip", picture)
+        self.assertIn("-limit", picture)
+        video = helper.transcode_argv("video", None, "mp4", "720p", 5, 6, programs)
+        self.assertEqual(video[video.index("-protocol_whitelist") + 1], "file")
+        self.assertEqual(video[video.index("-format_whitelist") + 1], helper.TRANSCODE_DEMUXERS)
+        self.assertLess(video.index("-format_whitelist"), video.index("-i"))
+        self.assertIn("-nostdin", video)
+        self.assertEqual(video[video.index("-map_metadata") + 1], "-1")
+        self.assertEqual(video[-1], "/proc/self/fd/6")
+        for name in ("hls", "concat", "image2", "lavfi"):
+            self.assertNotIn(name, helper.TRANSCODE_DEMUXERS.split(","))
+
+    def test_transcode_needs_absolute_paths_a_known_format_and_size(self):
+        for req in [
+            {"paths": ["relative.png"], "format": "jpg", "resolution": "low"},
+            {"paths": [], "format": "jpg", "resolution": "low"},
+            {"paths": ["/tmp/a.png"], "format": "exe", "resolution": "low"},
+            {"paths": ["/tmp/a.png"], "format": "jpg", "resolution": "huge"},
+        ]:
+            req.update({"id": self.next_id(), "op": "transcode"})
+            err = self.terminal(self.helper.call(req))
+            self.assertEqual(err["t"], "error")
+            self.assertEqual(err["code"], "EINVAL")
+
+    def test_a_file_that_is_not_media_is_refused_without_running_a_tool(self):
+        path = self.path("trick.png")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("push graphic-context\nimage over 0,0 0,0 '/etc/hostname'\npop graphic-context\n")
+        err = self.terminal(self.helper.call({"id": self.next_id(), "op": "transcode",
+                                              "paths": [path], "format": "jpg", "resolution": "low"}))
+        self.assertEqual(err["code"], "EFAIL")
+        self.assertEqual(err["message"], "not a picture or video")
+        self.assertEqual(sorted(os.listdir(self.root)), ["trick.png"])
+
+
+class PreviewSizeTests(unittest.TestCase):
+    def png(self, width, height):
+        header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+        return [(b"IHDR", header), (b"IDAT", zlib.compress(b"\0")), (b"IEND", b"")]
+
+    def test_sharper_previews_live_in_omafiles_own_cache_and_stop_at_2048(self):
+        helper = load_helper_module()
+        folder, side, limit = helper.thumb_place("/home/u/.cache/thumbnails", helper.PREVIEW_BUCKET)
+        self.assertEqual(folder, helper.preview_root())
+        self.assertNotIn("/thumbnails", folder)
+        self.assertEqual(side, 2048)
+        self.assertEqual(helper.thumb_place("/c/thumbnails", "xx-large"), ("/c/thumbnails/xx-large", 1024, helper.THUMB_MAX_READ))
+        self.assertTrue(helper.safe_thumb(self.png(2048, 1536), side))
+        self.assertFalse(helper.safe_thumb(self.png(2049, 10), side))
+        self.assertFalse(helper.safe_thumb(self.png(2048, 1536)), "the shared cache still stops at 1024")
+
+    def test_old_previews_are_pruned(self):
+        helper = load_helper_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            for i in range(5):
+                path = os.path.join(tmp, "%d.png" % i)
+                with open(path, "wb") as f:
+                    f.write(b"x")
+                os.utime(path, (1000 + i, 1000 + i))
+            helper.prune_previews(tmp, 3)
+            self.assertEqual(sorted(os.listdir(tmp)), ["2.png", "3.png", "4.png"])
+
 
 class MountableDeviceTests(unittest.TestCase):
     def load_helper(self):

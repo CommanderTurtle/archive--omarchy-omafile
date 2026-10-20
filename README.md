@@ -99,13 +99,19 @@ Zoom scales rows, icons and grid cells from 50 to 300 percent. Use the minus and
 
 Press Space on a file to preview it without opening another app. Images are shown at up to 1024 px, made by your system's thumbnailer rather than decoded inside the shell, so a crafted image cannot weigh the desktop down; image previews follow the Previews and thumbnails setting. Text files such as `.yml`, `.json`, `.md` or scripts are shown as text, up to the first 256 KB. Arrow keys move to the next file while the preview stays open. Enter opens the file, and Space or Escape closes the preview. Preview is also in the right click menu.
 
+Scroll over a picture to zoom in at the pointer, up to 8 times, and drag to move around. Double click, or press 0, to fit it again, and + and - zoom from the keyboard. The zoom stays as you arrow to the next picture, which starts centred. Turn on **Sharper image previews** in Settings, under Browsing, to make previews up to 2048 px instead of 1024 px, which helps when you zoom in. Those are made by the same thumbnailer, take longer, and are kept in Omafile's own cache rather than the shared one. The original file is still never decoded inside the shell.
+
 Audio files (`.mp3`, `.flac`, `.ogg`, `.opus`, `.m4a`, `.aac`, `.wav`, `.wma`) start playing as soon as the preview opens, with the title, artist, album and cover art when the file has them. Arrow to the next file to hear it instead, which makes it quick to go through a folder of tracks or samples. K or P plays and pauses, Shift+Left and Shift+Right skip 5 seconds, and M mutes. Playback stops when the preview closes. The volume is kept while the window stays open. Playing audio needs Qt Multimedia, which Omarchy already installs alongside Kdenlive. Without it the preview says to install `qt6-multimedia`. The shell plays a copy of the song's audio that Omafile makes with `ffmpeg`, without cover art or tags, so a crafted song cannot reach the shell's media player; the cover comes from the thumbnailer instead.
+
+Open, Open with and Open in editor in the right click menu act on every selected item when you right click one of them. Opening several files starts each app once with all of its files, the way GNOME Files does, instead of a window per file. Apps that take one file at a time get one launch per file.
 
 Open with in the right click menu lists your apps with their icons. Click an app to select it, then double click it or press Open. Turn on **Always open ... with this app** to make it the default for that file type, the same default double click and Opens with in Properties use. It is not offered for folders.
 
 Right click an archive and choose **Extract here** to extract it next to itself. It works on several selected archives at once. Zip, tar, 7z and rar files are supported. An archive with one item at the top, such as a single folder, extracts as that item. Anything else goes into a new folder named after the archive. Existing files are never overwritten: a clashing name gets a number. Extractions show in the Transfers panel with how much of the archive has been read, the number of files so far and a button to cancel. A cancelled or failed extraction leaves nothing behind. The extracted item is selected when it is done. Double click and Enter open an archive in your default app, unless you turn on **Extract archives when opened** in Settings, under Browsing, which makes them extract it instead, as GNOME Files does.
 
 To make an archive, select files or folders, right click and choose **Compress…**. Name it and pick a format: `.zip` opens anywhere, `.tar.xz` and `.tar.gz` suit Linux and macOS, and `.7z` is the smallest but needs 7-Zip on Windows. The archive is made next to the items, shows in the Transfers panel with a cancel button, and is selected when it is done. An existing file with the same name is never replaced: the new archive gets a number.
+
+Right click a picture or video, or several, and choose **Transcode…** to make a copy for sharing, with the same presets as Omarchy's `omarchy transcode`. Pictures become JPG or PNG at high (3160 px wide), medium (2160 px) or low (1080 px), turned the right way up and without their metadata, such as where a photo was taken. Videos become MP4 or GIF at 4K, 1080p or 720p, also without metadata. The copy is made next to each file as `name-size.format`, shows in the Transfers panel with a cancel button, and is selected when it is done. An existing file is never replaced: the copy gets a number. Unlike `omarchy transcode`, it does not replace your clipboard. Transcoding needs ImageMagick for pictures and `ffmpeg` for videos, which Omarchy installs.
 
 ### Transfers
 
@@ -305,6 +311,7 @@ Undo covers trash, rename, move, copy and new file or folder. Undoing a trash pu
 | `K` / `P` | Play or pause audio, in the preview |
 | `Shift+Left` / `Shift+Right` | Skip back or forward 5 seconds, in the preview |
 | `M` | Mute audio, in the preview |
+| `+` / `-` / `0` | Zoom a picture in, out and back to fit, in the preview |
 | `Ctrl+H` | Show hidden files |
 | `F9` / `Ctrl+B` | Show or hide the sidebar |
 | `Ctrl+F`, or just type | Search in this folder |
@@ -354,6 +361,7 @@ Configure these keys through the Omarchy bar widget settings:
 | `showTransferBadge` | Show a progress ring on the bar icon while a transfer runs |
 | `showDrives` | Show the Drives section in the sidebar |
 | `thumbnails` | Show image previews and thumbnails |
+| `largePreviews` | Make the Space preview up to 2048 px instead of 1024 px. Off by default |
 | `glyph` | Custom icon for the bar widget |
 | `mode` | `files` for the file manager icon, `trash` for a trash can |
 | `trashConfirm` | Ask before a right click empties the trash |

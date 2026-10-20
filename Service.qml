@@ -1170,6 +1170,38 @@ Item {
     return id
   }
 
+  function transcodePaths(paths, format, resolution, onDone, onError) {
+    var folder = Model.dirname(paths[0])
+    var record = {
+      id: 0, op: "transcode", label: format + " " + resolution, dest: folder, state: "running",
+      bytes: 0, total: 0, files: 0, filesTotal: paths.length, current: "", rate: 0,
+      errors: [], startedMs: Date.now(), finishedMs: 0, count: paths.length, from: folder
+    }
+    var id = request({ op: "transcode", paths: paths, format: format, resolution: resolution }, {
+      onData: function (m) {
+        if (m.t === "progress") updateTransfer(m.id, {
+          files: Number(m.files) || 0, filesTotal: Number(m.filesTotal) || 0, current: String(m.current || "")
+        })
+      },
+      onDone: function (m) {
+        var outputs = m.outputs || []
+        updateTransfer(m.id, { state: "done", result: outputs.length > 0 ? String(outputs[0]) : "", errors: m.failures || [] })
+        trimTransferHistory()
+        if (onDone) onDone(m)
+      },
+      onError: function (m) {
+        updateTransfer(m.id, { state: m.code === "ECANCELED" ? "cancelled" : "failed", message: String(m.message || "") })
+        trimTransferHistory()
+        if (onError) onError(m)
+      }
+    })
+    record.id = id
+    var next = transfers.slice()
+    next.push(record)
+    transfers = next
+    return id
+  }
+
   function extractArchive(path, onDone, onError) {
     var folder = Model.dirname(path)
     var record = {
@@ -1206,11 +1238,64 @@ Item {
     Quickshell.execDetached(["gio", "open", path])
   }
 
-  function openWith(command, path, inTerminal) {
-    var argv = Model.expandFieldCodes(command, path)
-    if (argv.length === 0) return
-    if (inTerminal) argv = ["xdg-terminal-exec"].concat(argv)
-    Quickshell.execDetached(argv)
+  function openExternallyFiles(paths) {
+    var list = []
+    for (var i = 0; i < paths.length; i++) list.push(String(paths[i]))
+    if (list.length < 2) {
+      for (var j = 0; j < list.length; j++) openExternally(list[j])
+      return
+    }
+    var handlers = ({})
+    var left = list.length
+    var settle = function () {
+      left--
+      if (left === 0) root.launchByHandler(list, handlers)
+    }
+    for (var k = 0; k < list.length; k++) root.requestHandler(list[k], handlers, settle)
+  }
+
+  function requestHandler(path, handlers, settle) {
+    return request({ op: "opener", path: path }, {
+      onData: function (m) { if (m.t === "opener") handlers[path] = String(m.handler || "") },
+      onDone: settle,
+      onError: settle
+    })
+  }
+
+  function appCommand(app) {
+    if (!app) return []
+    var exec = Model.tokenizeCommand(String(app.execString || ""))
+    if (exec.length > 0) return exec
+    return Array.prototype.slice.call(app.command || [])
+  }
+
+  function launchByHandler(list, handlers) {
+    var groups = ({})
+    var order = []
+    for (var i = 0; i < list.length; i++) {
+      var id = String(handlers[list[i]] || "").replace(/\.desktop$/, "")
+      var app = id ? DesktopEntries.byId(id) : null
+      var command = appCommand(app)
+      if (command.length === 0) {
+        openExternally(list[i])
+        continue
+      }
+      if (!groups[id]) {
+        groups[id] = { command: command, terminal: app.runInTerminal === true, paths: [] }
+        order.push(id)
+      }
+      groups[id].paths.push(list[i])
+    }
+    for (var g = 0; g < order.length; g++) {
+      var group = groups[order[g]]
+      openWith(group.command, group.paths, group.terminal)
+    }
+  }
+
+  function openWith(command, paths, inTerminal) {
+    var launches = Model.expandFieldCodesMulti(command, paths)
+    for (var i = 0; i < launches.length; i++)
+      Quickshell.execDetached(inTerminal ? ["xdg-terminal-exec"].concat(launches[i]) : launches[i])
   }
 
   function setDefaultApp(path, desktopId, onDone, onError) {
@@ -1224,10 +1309,10 @@ Item {
     })
   }
 
-  function runCommandOn(text, path) {
+  function runCommandOn(text, paths) {
     var argv = Model.tokenizeCommand(text)
     if (argv.length === 0) return false
-    argv.push(String(path))
+    for (var i = 0; i < paths.length; i++) argv.push(String(paths[i]))
     Quickshell.execDetached(argv)
     return true
   }
@@ -1243,10 +1328,13 @@ Item {
       "bash", "-c", (agentCommand || "claude") + "; exec bash"])
   }
 
-  function openEditor(path) {
+  function openEditor(paths) {
+    var list = []
+    for (var i = 0; i < paths.length; i++) list.push(String(paths[i]))
+    if (list.length === 0) return
     var configured = String(settingNow("editor", "") || "").trim()
-    if (configured) Quickshell.execDetached(["sh", "-c", configured + " \"$1\"", "omafile", path])
-    else Quickshell.execDetached(["omarchy-launch-editor", path])
+    if (configured) Quickshell.execDetached(["sh", "-c", configured + " \"$@\"", "omafile"].concat(list))
+    else Quickshell.execDetached(["omarchy-launch-editor"].concat(list))
   }
 
   function copyToClipboardText(text) {

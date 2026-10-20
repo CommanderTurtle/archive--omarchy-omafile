@@ -50,7 +50,7 @@ ShellRoot {
         mouseDoubleClickSequence(list.itemAtIndex(0))
         var call = mock.called("openWith")
         verify(call !== null, "openWith called by click")
-        compare(call.args[1], "/tmp/alpha.yml")
+        compare(call.args[1], ["/tmp/alpha.yml"])
         compare(browser.dialogMode, "")
       }
 
@@ -78,7 +78,7 @@ ShellRoot {
         mouseClick(button)
         var call = mock.called("openWith")
         verify(call !== null, "Open button launches")
-        compare(call.args[1], "/tmp/alpha.yml")
+        compare(call.args[1], ["/tmp/alpha.yml"])
         compare(mock.called("setDefaultApp"), null, "no default without the toggle")
         compare(browser.dialogMode, "")
       }
@@ -145,6 +145,28 @@ ShellRoot {
         mouseClick(findChild(browser, "dialogConfirmButton"))
         verify(mock.called("openWith") !== null, "folder still opens with the app")
         compare(mock.called("setDefaultApp"), null, "folders never get a default")
+      }
+
+      function test_1h_enterInOpenWithLaunchesOnce() {
+        openWithDialogFor(0)
+        var field = findChild(browser, "appField")
+        tryCompare(field, "activeFocus", true)
+        keyClick(Qt.Key_E)
+        verify(browser.filteredApps().length > 0)
+        keyClick(Qt.Key_Return)
+        compare(browser.dialogMode, "")
+        compare(count("openWith"), 1, "Enter launches the chosen app once")
+        compare(mock.called("openExternally"), null, "and never opens the file in the default app too")
+
+        openWithDialogFor(0)
+        tryCompare(field, "activeFocus", true)
+        keyClick(Qt.Key_Z)
+        keyClick(Qt.Key_Q)
+        keyClick(Qt.Key_Q)
+        browser.appCursor = -1
+        keyClick(Qt.Key_Return)
+        compare(count("runCommandOn"), 1, "Enter runs a typed command once")
+        compare(mock.called("openExternally"), null)
       }
 
       function test_2_sortMenu() {
@@ -932,6 +954,60 @@ ShellRoot {
         verify(!browser.previewOpen)
       }
 
+      function test_5e_previewZoomAndPan() {
+        waitRows()
+        var savedExts = mock.thumbExts
+        mock.thumbExts = { yml: true, png: true }
+        mock.thumbResult = String(Qt.resolvedUrl("FilePlugin/icon.png")).replace(/^file:\/\//, "")
+        mock.calls = []
+        var png = Model.decodeEntry(["beta.png", "f", 10, 100, 420, null], "/tmp")
+        browser.showPreview(png)
+        var image = findChild(browser, "previewImage")
+        tryCompare(image, "status", Image.Ready)
+        verify(String(image.source).indexOf("/tmp/beta.png") < 0, "zooming still shows the helper's preview, never the original")
+        compare(mock.called("thumbnailFor").args[2], "xx-large")
+        var area = findChild(browser, "previewZoomArea")
+        verify(area.enabled)
+
+        mouseWheel(area, area.width / 2, area.height / 2, 0, 120)
+        verify(browser.previewZoom > 1, "the wheel zooms in")
+        browser.zoomPreviewAt(4, area.width / 2, area.height / 2)
+        mouseDrag(area, area.width / 2, area.height / 2, 40, 30)
+        verify(browser.previewPanX > 0 && browser.previewPanY > 0, "dragging pans")
+        browser.panPreview(100000, -100000)
+        var size = browser.previewPaintedSize(browser.previewZoom)
+        compare(browser.previewPanX, Math.max(0, (size.w - area.width) / 2), "panning stops at the edge")
+        compare(browser.previewPanY, -Math.max(0, (size.h - area.height) / 2))
+        mouseDoubleClickSequence(area)
+        compare(browser.previewZoom, 1, "a double click resets")
+        compare(browser.previewPanX, 0)
+
+        keyClick(Qt.Key_Equal)
+        verify(browser.previewZoom > 1, "+ zooms in")
+        keyClick(Qt.Key_Minus)
+        compare(browser.previewZoom, 1, "- zooms back out")
+        for (var i = 0; i < 30; i++) browser.zoomPreviewAt(1.25, 10, 10)
+        compare(browser.previewZoom, browser.previewZoomMax)
+        browser.panPreview(5, 5)
+        browser.showPreview(Model.decodeEntry(["gamma.png", "f", 10, 100, 420, null], "/tmp"))
+        compare(browser.previewZoom, browser.previewZoomMax, "the zoom stays while moving to the next picture")
+        compare(browser.previewPanX, 0, "and the next picture starts centred")
+        keyClick(Qt.Key_0)
+        compare(browser.previewZoom, 1)
+        browser.closePreview()
+
+        mock.updateSetting("largePreviews", true)
+        mock.calls = []
+        browser.showPreview(png)
+        tryVerify(function () { return mock.called("thumbnailFor") !== null })
+        compare(mock.called("thumbnailFor").args[2], "preview", "sharper previews ask the helper for 2048 px")
+        browser.closePreview()
+        compare(browser.previewZoom, 1, "closing resets the zoom")
+        mock.updateSetting("largePreviews", false)
+        mock.thumbResult = ""
+        mock.thumbExts = savedExts
+      }
+
       function test_5b_audioPreview() {
         var tone = Quickshell.env("OMAFILE_TEST_TONE") || ""
         verify(tone !== "", "browser-flows.sh passes a tone file")
@@ -1290,10 +1366,44 @@ ShellRoot {
         mock.calls = []
         pane().selectAll()
         keyClick(Qt.Key_Return)
-        var opened = mock.calls.filter(function (c) { return c.name === "openExternally" })
-        compare(opened.length, 2, "both files open")
+        compare(count("openExternallyFiles"), 1, "the files open in one go")
+        compare(mock.called("openExternallyFiles").args[0], ["/tmp/alpha.yml", "/tmp/beta.png"], "both files open")
         compare(browser.tabsA.length, 2, "the folder opens in a new tab")
         keyClick(Qt.Key_W, Qt.ControlModifier)
+        pane().clearSelection()
+      }
+
+      function test_9ba_menuActsOnTheWholeSelection() {
+        waitRows()
+        pane().setSortOrder("name", false)
+        var alpha = names().indexOf("alpha.yml")
+        var beta = names().indexOf("beta.png")
+        pane().setCursor(alpha, false, false)
+        pane().setCursor(beta, false, true)
+        var clicked = pane().cursorEntry()
+        compare(clicked.name, "beta.png")
+        compare(pane().selectedEntries.length, 2)
+
+        mock.calls = []
+        browser.menuEntry = clicked
+        browser.runAction("open")
+        compare(mock.called("openExternallyFiles").args[0].length, 2, "Open in the menu opens every selected file")
+        mock.calls = []
+        browser.menuEntry = clicked
+        browser.runAction("editor")
+        compare(mock.called("openEditor").args[0].length, 2, "Open in editor gets every selected file")
+        browser.menuEntry = clicked
+        browser.runAction("openwith")
+        compare(browser.dialogTitle, "Open 2 items with")
+        wait(200)
+        mouseDoubleClickSequence(findChild(browser, "openWithList").itemAtIndex(0))
+        compare(mock.called("openWith").args[1].length, 2, "Open with gets every selected file")
+
+        mock.calls = []
+        var outside = Model.decodeEntry(["gamma.txt", "f", 1, 100, 420, null], "/tmp")
+        browser.menuEntry = outside
+        browser.runAction("editor")
+        compare(mock.called("openEditor").args[0], ["/tmp/gamma.txt"], "an item outside the selection acts alone")
         pane().clearSelection()
       }
 
@@ -1304,14 +1414,13 @@ ShellRoot {
         browser.openConfirmLimit = 2
         pane().selectAll()
         keyClick(Qt.Key_Return)
-        compare(mock.called("openExternally"), null, "asks before opening more than the limit")
+        compare(mock.called("openExternallyFiles"), null, "asks before opening more than the limit")
         keyClick(Qt.Key_Escape)
-        compare(mock.called("openExternally"), null, "cancel opens nothing")
+        compare(mock.called("openExternallyFiles"), null, "cancel opens nothing")
         compare(browser.tabsA.length, 1)
         keyClick(Qt.Key_Return)
         keyClick(Qt.Key_Return)
-        var opened = mock.calls.filter(function (c) { return c.name === "openExternally" })
-        compare(opened.length, 2, "confirming opens both files")
+        compare(mock.called("openExternallyFiles").args[0], ["/tmp/alpha.yml", "/tmp/beta.png"], "confirming opens both files")
         compare(browser.tabsA.length, 2, "confirming opens the folder in a new tab")
         browser.openConfirmLimit = limit
         keyClick(Qt.Key_W, Qt.ControlModifier)
@@ -1343,7 +1452,7 @@ ShellRoot {
         mock.calls = []
         browser.menuEntry = file
         browser.runAction("editor")
-        compare(mock.called("openEditor").args[0], "/tmp/notes.txt")
+        compare(mock.called("openEditor").args[0], ["/tmp/notes.txt"])
 
         verify(menuLabels(browser.contextActions(folder)).indexOf("Open Claude Code here") < 0, "no agent item without an agent")
         mock.agentAvailable = true
@@ -1536,7 +1645,7 @@ ShellRoot {
         mock.calls = []
         browser.openEntries([zip, tar, text])
         compare(count("extractArchive"), 2, "every opened archive is extracted")
-        compare(mock.called("openExternally").args[0], "/tmp/notes.txt")
+        compare(mock.called("openExternallyFiles").args[0], ["/tmp/notes.txt"])
 
         mock.extractResults = { "/tmp/pack.zip": { error: "damaged" } }
         mock.calls = []
@@ -1572,6 +1681,51 @@ ShellRoot {
         mouseClick(findChild(row, "cancelTransfer"))
         compare(mock.called("cancelTransfer").args[0], 9, "an extraction can be cancelled from the panel")
         mock.transfers = []
+      }
+
+      function test_9k_transcode() {
+        waitRows()
+        var png = Model.decodeEntry(["beta.png", "f", 10, 100, 420, null], "/tmp")
+        var yml = Model.decodeEntry(["alpha.yml", "f", 30, 300, 420, null], "/tmp")
+        var clip = Model.decodeEntry(["clip.mov", "f", 10, 100, 420, null], "/tmp")
+        verify(menuLabels(browser.contextActions(png)).indexOf("Transcode…") >= 0, "pictures can be transcoded")
+        verify(menuLabels(browser.contextActions(yml)).indexOf("Transcode…") < 0, "other files cannot")
+
+        mock.calls = []
+        browser.menuEntry = png
+        browser.runAction("transcode")
+        compare(browser.dialogMode, "transcode")
+        compare(browser.transcodeFormat, "jpg")
+        compare(browser.transcodeResolution, "medium")
+        compare(findChild(browser, "dialogConfirmButton").text, "Transcode")
+        findChild(browser, "transcodeFormat").changed("png")
+        findChild(browser, "transcodeSize").changed("low")
+        keyClick(Qt.Key_Return)
+        compare(browser.dialogMode, "")
+        var call = mock.called("transcodePaths")
+        compare(call.args[0], ["/tmp/beta.png"])
+        compare(call.args[1], "png")
+        compare(call.args[2], "low")
+        compare(browser.statusText, "Transcoded 1 file")
+
+        browser.menuEntry = clip
+        browser.runAction("transcode")
+        compare(browser.transcodeFormat, "mp4", "a video gets video formats")
+        compare(browser.transcodeResolution, "1080p")
+        browser.closeDialog()
+
+        browser.menuEntry = png
+        browser.runAction("transcode")
+        compare(browser.transcodeFormat, "png", "the last picture choice is kept")
+        compare(browser.transcodeResolution, "low")
+        browser.closeDialog()
+
+        mock.transcodeResult = { error: "could not transcode this file", code: "EFAIL" }
+        browser.menuEntry = png
+        browser.runAction("transcode")
+        browser.submitDialog()
+        compare(browser.statusText, "Could not transcode: could not transcode this file")
+        mock.transcodeResult = null
       }
 
       function test_9j_compress() {
@@ -1693,6 +1847,8 @@ ShellRoot {
         var keys = browser.contextActions(pane().cursorEntry()).map(function (a) { return a.key })
         verify(keys.indexOf("trash") < 0 && keys.indexOf("delete") < 0 && keys.indexOf("paste") < 0 && keys.indexOf("properties") < 0)
         verify(keys.indexOf("editor") < 0, "no editor while picking")
+        var pngKeys = browser.contextActions(Model.decodeEntry(["beta.png", "f", 10, 100, 420, null], "/tmp")).map(function (a) { return a.key })
+        verify(pngKeys.indexOf("transcode") < 0, "no transcoding while picking")
         verify(keys.indexOf("open") >= 0 && keys.indexOf("copy") >= 0)
         browser.acceptPick([Model.decodeEntry(["link.txt", "l", 1, 0, 0, "/etc/passwd"], "/tmp")])
         compare(mock.called("finishPick"), null, "a linked file is not handed to the app")

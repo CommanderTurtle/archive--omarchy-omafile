@@ -343,6 +343,17 @@ function isArchive(entry) {
   return false;
 }
 
+var transcodePictureExts = toSet(['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff']);
+var transcodeVideoExts = toSet(['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', 'mpg', 'mpeg', 'ts', 'flv']);
+
+function transcodeKind(entry) {
+  if (!entry || entry.isDir || entry.isBroken) return '';
+  var ext = extOf(String(entry.name || ''));
+  if (transcodePictureExts[ext]) return 'picture';
+  if (transcodeVideoExts[ext]) return 'video';
+  return '';
+}
+
 function parentPath(path) {
   var p = normalizePath(path);
   if (p === '/') return '/';
@@ -716,6 +727,67 @@ function expandFieldCodes(command, path) {
   if (out.length === 0) return [];
   if (!used) out.push(target);
   return out;
+}
+
+function takesFileList(command) {
+  var list = false;
+  var length = command && command.length ? command.length : 0;
+  for (var i = 0; i < length; i++) {
+    var arg = String(command[i]);
+    for (var j = 0; j < arg.length; j++) {
+      if (arg.charAt(j) !== '%') continue;
+      var code = arg.charAt(j + 1);
+      j++;
+      if (code === 'f' || code === 'u') return false;
+      if (code !== 'F' && code !== 'U') continue;
+      if (arg !== '%' + code && !isShellScriptArg(command, i)) return false;
+      list = true;
+    }
+  }
+  return list;
+}
+
+function expandFieldCodesMulti(command, paths) {
+  var targets = [];
+  var count = paths && paths.length ? paths.length : 0;
+  for (var p = 0; p < count; p++) targets.push(String(paths[p]));
+  if (targets.length === 0) return [];
+  if (targets.length === 1 || !takesFileList(command)) {
+    var each = [];
+    for (var t = 0; t < targets.length; t++) {
+      var single = expandFieldCodes(command, targets[t]);
+      if (single.length > 0) each.push(single);
+    }
+    return each;
+  }
+  var quoted = targets.map(shellQuote).join(' ');
+  var out = [];
+  for (var i = 0; i < command.length; i++) {
+    var arg = String(command[i]);
+    var inScript = isShellScriptArg(command, i);
+    if (!inScript && (arg === '%F' || arg === '%U')) {
+      out = out.concat(targets);
+      continue;
+    }
+    var built = '';
+    for (var j = 0; j < arg.length; j++) {
+      var ch = arg.charAt(j);
+      if (ch !== '%') {
+        built += ch;
+        continue;
+      }
+      var code = arg.charAt(j + 1);
+      if (code === '') {
+        built += '%';
+        continue;
+      }
+      j++;
+      if (code === '%') built += '%';
+      else if (code === 'F' || code === 'U') built += quoted;
+    }
+    if (built !== '') out.push(built);
+  }
+  return out.length > 0 ? [out] : [];
 }
 
 function tokenizeCommand(text) {

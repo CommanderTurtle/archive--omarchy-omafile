@@ -4426,21 +4426,29 @@ def op_compress(req, cancel_event):
             except OSError:
                 pass
         os.close(pfd)
-TRANSCODE_FORMATS = ("jpg", "png", "mp4", "gif")
+TRANSCODE_FORMATS = ("jpg", "png", "webp", "avif", "mp4", "gif")
+TRANSCODE_QUALITIES = ("high", "medium", "low")
 TRANSCODE_RESOLUTIONS = ("high", "medium", "low", "4k", "1080p", "720p")
 
 
 def op_transcode(req, cancel_event):
     req_id = req["id"]
     paths = req.get("paths")
-    fmt = req.get("format")
-    res = req.get("resolution")
+    fmt = req.get("format") or ""
+    qual = req.get("quality") or ""
+    res = req.get("resolution") or ""
+    res_ok = isinstance(res, str) and (
+        res in TRANSCODE_RESOLUTIONS or (res.isdigit() and int(res) > 0))
     if (not isinstance(paths, list) or not paths
             or not all(isinstance(p, str) and os.path.isabs(p) for p in paths)
-            or fmt not in TRANSCODE_FORMATS or res not in TRANSCODE_RESOLUTIONS):
+            or (fmt != "" and fmt not in TRANSCODE_FORMATS)
+            or (qual != "" and qual not in TRANSCODE_QUALITIES)
+            or (res != "" and not res_ok)
+            or (fmt == "" and res == "")):
         send_error(req_id, "EINVAL",
-                   "absolute paths, a format (jpg, png, mp4, gif) and a resolution "
-                   "(high, medium, low, 4k, 1080p, 720p) are required")
+                   "absolute paths and a forced axis are required: a codec "
+                   "(format + quality) and/or a resolution (high, medium, low, "
+                   "4k, 1080p, 720p, or a pixel width)")
         return
     try:
         trusted_program("omarchy-transcode")
@@ -4467,8 +4475,8 @@ def op_transcode(req, cancel_event):
         os.close(errfd)
         try:
             proc = run_trusted("bash", ["-c",
-                "exec omarchy-transcode \"$1\" \"$2\" \"$3\" >\"$4\" 2>&1",
-                "omafile-transcode", path, fmt, res, errfile], timeout=600)
+                "exec omarchy-transcode \"$1\" \"$2\" \"$3\" \"$4\" >\"$5\" 2>&1",
+                "omafile-transcode", path, fmt, qual, res, errfile], timeout=600)
             message = ""
             try:
                 with open(errfile, "r", encoding="utf-8", errors="replace") as fh:
@@ -4487,7 +4495,13 @@ def op_transcode(req, cancel_event):
             send_error(req_id, "ETRANSCODE", message or "transcode failed", path)
             return
         stem = os.path.splitext(os.path.basename(path))[0]
-        outputs.append(os.path.join(os.path.dirname(path), stem + "-" + res + "." + fmt))
+        # Mirror the CLI: stamp only what was forced (resolution and/or quality).
+        parts = [stem]
+        if res:
+            parts.append(res)
+        if qual:
+            parts.append(qual)
+        outputs.append(os.path.join(os.path.dirname(path), "-".join(parts) + "." + fmt))
     send_done(req_id, outputs=outputs)
 
 LNKR_VARIANTS = ("v1", "v2", "v3", "v4")
@@ -4514,6 +4528,31 @@ def lnkr_binary_candidates():
         candidates.append(os.path.join(root, "rust/target/release/linkodec"))
     return candidates
 
+
+def op_imagedims(req):
+    req_id = req["id"]
+    path = req.get("path")
+    if not isinstance(path, str) or not path.startswith("/"):
+        send_error(req_id, "EINVAL", "absolute path required")
+        return
+    try:
+        trusted_program("ffprobe")
+    except FileNotFoundError:
+        send_error(req_id, "EUNSUPPORTED", "ffprobe is not installed")
+        return
+    data = run_tool(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                     "-show_entries", "stream=width,height", "-of", "json", path])
+    try:
+        stream = data["streams"][0]
+        width = int(stream.get("width") or 0)
+        height = int(stream.get("height") or 0)
+    except (KeyError, IndexError, TypeError, ValueError):
+        send_error(req_id, "ENODATA", "no image dimensions found", path)
+        return
+    if width <= 0 or height <= 0:
+        send_error(req_id, "ENODATA", "no image dimensions found", path)
+        return
+    send_done(req_id, width=width, height=height)
 
 def op_lnkrresolve(req):
     req_id = req["id"]
@@ -4624,6 +4663,7 @@ SIMPLE_OPS = {
     "clipclear": op_clipclear,
     "stat": op_stat,
     "peek": op_peek,
+    "imagedims": op_imagedims,
     "thumbtypes": op_thumbtypes,
     "bookmarks": op_bookmarks,
     "setbookmarks": op_setbookmarks,

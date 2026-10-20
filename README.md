@@ -181,6 +181,8 @@ Turn on Pick files for other apps in Settings, under Opening. When a browser or 
 
 The chooser is only for choosing. The title names the app that asked, when the portal says which one. Trash, delete, paste, drop, rename, Properties, undo, the terminal and the other actions that change files are switched off while it is open, and no thumbnails are made for the folder the app opened it in. One app at a time can use it: a second request is turned down instead of replacing the one you are answering. Links are not handed out, so pick the file a link points to instead. When an app saves several files into a folder that already has some of those names, the new files get numbered names, so nothing there is overwritten.
 
+An app can open the chooser while you are typing somewhere else, so it ignores keys for the first moment, and typing that was already going on is ignored until it stops. Save and Select do nothing during that moment. If your typing was ignored, the name field waits for a click before it takes keys, so the rest of what you were typing cannot become the file name.
+
 It works through the desktop portal, the same route every app uses to ask for a file. Omafile registers a small D-Bus service in your home directory and tells the portal to send file chooser requests to it. Other portals, such as screen sharing, are left alone.
 
 The portal only reads its list of backends from `/usr/share/xdg-desktop-portal/portals`, so enabling asks for your password once to install one file there, `omafile.portal`. Nothing else outside your home directory changes.

@@ -374,6 +374,9 @@ Item {
   readonly property bool pickSaving: picking && (pick.mode === "save" || pick.mode === "savefiles")
   readonly property bool pickNeedsName: picking && pick.mode === "save"
   property int pickFilter: -1
+  property bool pickInputHeld: false
+  property bool pickTypedEarly: false
+  readonly property int pickKeyDelay: 600
   readonly property var pickBlockedActions: ({
     cut: true, paste: true, rename: true, trash: true, delete: true, restore: true, emptytrash: true,
     extract: true, compress: true, properties: true, newfile: true, terminal: true, agent: true,
@@ -476,12 +479,32 @@ Item {
     var name = String(pick.currentName || "")
     if (!name && pick.currentFile) name = Model.basename(String(pick.currentFile))
     pickNameField.text = name
-    if (pickNeedsName) {
-      pickNameField.forceActiveFocus()
-      var dot = name.lastIndexOf(".")
-      if (dot > 0) pickNameField.select(0, dot)
-      else pickNameField.selectAll()
-    } else keyCatcher.forceActiveFocus()
+    keyCatcher.forceActiveFocus()
+    pickTypedEarly = false
+    pickInputHeld = true
+    pickHoldTimer.restart()
+  }
+
+  function holdPickKey() {
+    pickTypedEarly = true
+    pickHoldTimer.restart()
+  }
+
+  function releasePickInput() {
+    pickInputHeld = false
+    if (!picking) return
+    if (pickTypedEarly)
+      statusText = pickNeedsName ? "Ignored typing from before the chooser opened. Click the name to type one"
+        : "Ignored typing from before the chooser opened"
+    else if (pickNeedsName) focusPickName()
+  }
+
+  function focusPickName() {
+    var name = String(pickNameField.text || "")
+    pickNameField.forceActiveFocus()
+    var dot = name.lastIndexOf(".")
+    if (dot > 0) pickNameField.select(0, dot)
+    else pickNameField.selectAll()
   }
 
   function completePick(paths) {
@@ -510,7 +533,7 @@ Item {
   }
 
   function acceptPick(entries) {
-    if (!picking) return
+    if (!picking || pickInputHeld) return
     var p = activePane()
     if (pick.mode === "save") {
       var name = String(pickNameField.text || "").trim()
@@ -1950,6 +1973,10 @@ Item {
   }
 
   function handleKey(event) {
+    if (pickInputHeld) {
+      holdPickKey()
+      return true
+    }
     if (confirm.opened) return confirm.handleKey(event)
     if (dialogMode === "conflict") {
       if (Date.now() - conflictShownMs < conflictKeyDelay) return true
@@ -2146,6 +2173,12 @@ Item {
       return true
     }
     return false
+  }
+  Timer {
+    id: pickHoldTimer
+    interval: root.pickKeyDelay
+    repeat: false
+    onTriggered: root.releasePickInput()
   }
   Timer {
     id: selectTimer
@@ -2585,6 +2618,8 @@ Item {
           Button {
             objectName: "pickAccept"
             anchors.verticalCenter: parent.verticalCenter
+            enabled: !root.pickInputHeld
+            opacity: enabled ? 1 : 0.4
             text: root.pickAcceptLabel()
             bordered: true
             selected: true

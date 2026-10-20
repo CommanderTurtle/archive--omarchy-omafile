@@ -461,6 +461,11 @@ ShellRoot {
         mock.statItems = ({})
       }
 
+      function beginPick() {
+        browser.beginPickSession()
+        tryCompare(browser, "pickInputHeld", false)
+      }
+
       function menuLabels(items) { return items.filter(function (i) { return i.label !== "" }).map(function (i) { return i.label }) }
 
       function test_3i_sidebarMenu() {
@@ -1183,7 +1188,7 @@ ShellRoot {
         mock.pickRequest = null
         browser.pickerRequest = { mode: "open", multiple: false, directory: false, result: "/run/x.json",
           filters: [{ name: "Images", patterns: ["*.png"] }, { name: "All", patterns: ["*"] }], currentFilter: 0 }
-        browser.beginPickSession()
+        beginPick()
         verify(findChild(browser, "pickBar").visible)
         tryVerify(function () { return !pane().loading && pane().rows.length === 2 })
         waitForRendering(browser)
@@ -1205,7 +1210,7 @@ ShellRoot {
       function test_8_pickSaveAndCancel() {
         mock.calls = []
         browser.pickerRequest = { mode: "save", result: "/run/y.json", currentFolder: "/tmp", currentName: "new.txt", filters: [] }
-        browser.beginPickSession()
+        beginPick()
         tryVerify(function () { return !pane().loading && pane().rows.length === 3 })
         waitForRendering(browser)
         mouseClick(findChild(browser, "pickAccept"))
@@ -1214,7 +1219,7 @@ ShellRoot {
         var savedStat = mock.statItems
         mock.statItems = { "/tmp/alpha.yml": { kind: "f", size: 30, linkTarget: null } }
         browser.pickerRequest = { mode: "save", result: "/run/z.json", currentFolder: "/tmp", currentName: "alpha.yml" }
-        browser.beginPickSession()
+        beginPick()
         tryVerify(function () { return !pane().loading && pane().rows.length === 3 })
         waitForRendering(browser)
         mouseClick(findChild(browser, "pickAccept"))
@@ -1227,7 +1232,7 @@ ShellRoot {
         mock.calls = []
         mock.statItems = { "/tmp/.hidden.txt": { kind: "f", size: 1, linkTarget: null } }
         browser.pickerRequest = { mode: "save", result: "/run/h.json", currentFolder: "/tmp", currentName: ".hidden.txt" }
-        browser.beginPickSession()
+        beginPick()
         tryVerify(function () { return !pane().loading && pane().rows.length === 3 })
         mouseClick(findChild(browser, "pickAccept"))
         compare(mock.called("finishPick"), null, "a hidden file that is not in the view still asks before replacing")
@@ -1241,7 +1246,7 @@ ShellRoot {
         mock.statItems = savedStat
         mock.calls = []
         browser.pickerRequest = { mode: "open", result: "/run/w.json" }
-        browser.beginPickSession()
+        beginPick()
         waitForRendering(browser)
         keyClick(Qt.Key_Escape)
         compare(mock.called("finishPick").args[0].ok, false)
@@ -1615,7 +1620,7 @@ ShellRoot {
       function test_8b_pickSaveNamesStayInTheFolder() {
         mock.calls = []
         browser.pickerRequest = { mode: "save", result: "/run/u.json", currentFolder: "/tmp", currentName: "x.txt" }
-        browser.beginPickSession()
+        beginPick()
         tryVerify(function () { return !pane().loading && pane().rows.length === 3 })
         findChild(browser, "pickNameField").text = ".."
         browser.acceptPick(null)
@@ -1625,7 +1630,7 @@ ShellRoot {
 
         mock.calls = []
         browser.pickerRequest = { mode: "savefiles", result: "/run/s.json", currentFolder: "/tmp", files: ["a.txt", "b.txt"] }
-        browser.beginPickSession()
+        beginPick()
         tryVerify(function () { return !pane().loading && pane().rows.length === 3 })
         browser.acceptPick(null)
         var call = mock.called("finishPick")
@@ -1634,7 +1639,7 @@ ShellRoot {
 
         mock.calls = []
         browser.pickerRequest = { mode: "savefiles", result: "/run/t.json", currentFolder: "/tmp", files: ["ok.txt", "../escape.txt"] }
-        browser.beginPickSession()
+        beginPick()
         tryVerify(function () { return !pane().loading && pane().rows.length === 3 })
         browser.acceptPick(null)
         call = mock.called("finishPick")
@@ -1646,7 +1651,7 @@ ShellRoot {
       function test_8c_pickNewFolder() {
         mock.calls = []
         browser.pickerRequest = { mode: "open", directory: true, result: "/run/d.json", currentFolder: "/tmp" }
-        browser.beginPickSession()
+        beginPick()
         waitRows()
         waitForRendering(browser)
         browser.openToolbarMenu("main", findChild(browser, "mainMenuButton"))
@@ -1668,7 +1673,7 @@ ShellRoot {
       function test_8d_pickerBlocksRiskyActions() {
         mock.calls = []
         browser.pickerRequest = { mode: "open", result: "/run/g.json", currentFolder: "/tmp", appId: "org.example.App" }
-        browser.beginPickSession()
+        beginPick()
         waitRows()
         verify(browser.pickTitle().indexOf("(for org.example.App)") > 0, "the chooser names the app that asked")
         verify(pane().picking, "the panes know they are picking, so no thumbnails are made")
@@ -1719,6 +1724,50 @@ ShellRoot {
         compare(findChild(browser, "audioPreviewLoader").active, false)
         browser.closePreview()
         mock.remoteRoots = []
+      }
+
+      function test_8g_pickIgnoresTypingFromBeforeItOpened() {
+        pane().navigate("/tmp")
+        waitRows()
+        mock.calls = []
+        var name = findChild(browser, "pickNameField")
+        browser.pickerRequest = { mode: "save", result: "/run/k.json", currentFolder: "/tmp", currentName: "report.txt" }
+        browser.beginPickSession()
+        verify(browser.pickInputHeld, "input waits while the chooser opens")
+        verify(!name.activeFocus, "the name field does not take keys straight away")
+        mouseClick(findChild(browser, "pickAccept"))
+        browser.acceptPick(null)
+        keyClick(Qt.Key_S)
+        keyClick(Qt.Key_E)
+        keyClick(Qt.Key_Return)
+        compare(mock.called("finishPick"), null, "nothing typed or clicked as the chooser opens answers it")
+        compare(name.text, "report.txt", "typing from before the chooser opened never reaches the name")
+        verify(browser.pickInputHeld, "each early key restarts the wait")
+        tryCompare(browser, "pickInputHeld", false)
+        verify(!name.activeFocus, "after early typing the name needs a click")
+        verify(browser.statusText.indexOf("Ignored typing") === 0, browser.statusText)
+        mouseClick(name)
+        verify(name.activeFocus, "a click lets the name take keys")
+        browser.cancelPick()
+
+        mock.calls = []
+        browser.pickerRequest = { mode: "save", result: "/run/l.json", currentFolder: "/tmp", currentName: "report.txt" }
+        beginPick()
+        verify(name.activeFocus, "without early typing the name takes keys once the wait ends")
+        compare(name.selectedText, "report")
+        keyClick(Qt.Key_N)
+        keyClick(Qt.Key_Return)
+        compare(mock.called("finishPick").args[0].paths[0], "/tmp/n.txt")
+
+        mock.calls = []
+        var file = Model.decodeEntry(["beta.png", "f", 10, 100, 420, null], "/tmp")
+        browser.pickerRequest = { mode: "open", result: "/run/m.json", currentFolder: "/tmp" }
+        browser.beginPickSession()
+        browser.handleOpenRequest(file)
+        compare(mock.called("finishPick"), null, "a double click as the chooser opens hands over nothing")
+        tryCompare(browser, "pickInputHeld", false)
+        browser.handleOpenRequest(file)
+        compare(mock.called("finishPick").args[0].paths[0], "/tmp/beta.png")
       }
 
       function test_zz_done() {

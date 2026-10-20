@@ -4490,7 +4490,111 @@ def op_transcode(req, cancel_event):
         outputs.append(os.path.join(os.path.dirname(path), stem + "-" + res + "." + fmt))
     send_done(req_id, outputs=outputs)
 
+LNKR_VARIANTS = ("v1", "v2", "v3", "v4")
+LNKR_MODES = ("rich", "safe", "make")
 
+
+def lnkr_binary_candidates():
+    # Known path first, then a lightweight foldername scan for the rust target.
+    home = HOME
+    candidates = [os.path.join(home, "Documents/Dev/linkoder/bin/linkodec")]
+    for base in (os.path.join(home, "Documents/Dev"),
+                 os.path.join(home, "Documents"),
+                 os.path.join(home, "src"),
+                 home):
+        try:
+            names = os.listdir(base)
+        except OSError:
+            continue
+        if "linkoder" not in names:
+            continue
+        root = os.path.join(base, "linkoder")
+        candidates.append(os.path.join(root, "bin/linkodec"))
+        candidates.append(os.path.join(root, "target/release/linkodec"))
+        candidates.append(os.path.join(root, "rust/target/release/linkodec"))
+    return candidates
+
+
+def op_lnkrresolve(req):
+    req_id = req["id"]
+    for candidate in lnkr_binary_candidates():
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            send_done(req_id, path=candidate)
+            return
+    send_done(req_id, path="")
+
+
+def op_lnkreencode(req):
+    req_id = req["id"]
+    binary = req.get("binary")
+    path = req.get("path")
+    mode = req.get("mode")
+    variant = req.get("variant")
+    if (not isinstance(binary, str) or not os.path.isabs(binary)
+            or not os.path.isfile(binary)
+            or not isinstance(path, str) or not os.path.isabs(path)
+            or mode not in LNKR_MODES
+            or variant not in LNKR_VARIANTS):
+        send_error(req_id, "EINVAL",
+                   "absolute binary and path, a mode (rich, safe, make) and a variant (v1..v4) are required")
+        return
+    if not os.path.isfile(path):
+        send_error(req_id, "ENOENT", "no such file", path)
+        return
+    cmd = [binary, path, "--" + mode, "--" + variant]
+    env = trusted_env()
+    env["PATH"] = os.environ.get("PATH", "/usr/bin:/bin")
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env=env, timeout=120, check=False)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        send_error(req_id, errno_code(e), "linkodec encode failed", path)
+        return
+    if proc.returncode != 0:
+        message = proc.stderr.decode("utf-8", "replace").strip()
+        send_error(req_id, "ELNKR", message or "linkodec encode failed", path)
+        return
+    code = ""
+    for line in proc.stdout.decode("utf-8", "replace").splitlines():
+        line = line.strip()
+        if line.startswith("#"):
+            code = line
+            break
+    if not code:
+        send_error(req_id, "ELNKR", "linkodec did not return a code", path)
+        return
+    base = "https://app.shel.sh/make/" if code.startswith("#share:") else "https://a.shel.sh/"
+    send_done(req_id, code=code, url=base + code)
+def op_lnkrclipboard(req):
+     req_id = req["id"]
+     text = req.get("text")
+     if not isinstance(text, str) or text == "":
+         send_error(req_id, "EINVAL", "text required")
+         return
+     try:
+         subprocess.run(["wl-copy"], input=text.encode(),
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+     except Exception as e:
+         send_error(req_id, "EINTERNAL", str(e))
+         return
+     send_done(req_id)
+
+
+def op_lnkrkill(req):
+     req_id = req["id"]
+     try:
+         subprocess.run(["pkill", "-f", "encode-worker.js"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+         import glob
+         for f in glob.glob(os.path.expanduser("~/Documents/Dev/linkoder/.encode-worker-*")):
+             try: os.unlink(f)
+             except OSError: pass
+     except Exception as e:
+         send_error(req_id, "EINTERNAL", str(e))
+         return
+     send_done(req_id)
 CANCELLABLE_OPS = {
     "list": op_list,
     "search": op_search,
@@ -4518,7 +4622,6 @@ SIMPLE_OPS = {
     "cliptext": op_cliptext,
     "clipimage": op_clipimage,
     "clipclear": op_clipclear,
-    "samedev": op_samedev,
     "stat": op_stat,
     "peek": op_peek,
     "thumbtypes": op_thumbtypes,
@@ -4550,6 +4653,10 @@ SIMPLE_OPS = {
     "unwatch": op_unwatch,
     "baricon": op_baricon,
     "barsettings": op_barsettings,
+    "lnkrresolve": op_lnkrresolve,
+    "lnkreencode": op_lnkreencode,
+    "lnkrclipboard": op_lnkrclipboard,
+     "lnkrkill": op_lnkrkill,
 }
 
 def dispatch(req):

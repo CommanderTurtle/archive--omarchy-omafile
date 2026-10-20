@@ -48,7 +48,8 @@
       "gridCaption2": "none",
       "gridCaption3": "none",
       "windowMode": "window",
-      "trashConfirm": true
+      "trashConfirm": true,
+      "lnkrVariant": "v3"
     },
     "schema": [
       {
@@ -200,6 +201,12 @@
         "type": "boolean",
         "label": "Ask before a right click empties the trash",
         "defaultValue": true
+      },
+      {
+        "key": "lnkrVariant",
+        "type": "string",
+        "label": "Ln.kr hashtag variant (v1, v2, v3, v4)",
+        "defaultValue": "v3"
       }
     ]
   }

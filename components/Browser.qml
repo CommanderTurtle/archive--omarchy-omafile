@@ -49,6 +49,7 @@ Item {
   property var menuEntry: null
   property string menuKind: ""
   property string statusText: ""
+  property string lnkrBinary: ""
   property bool transfersOpen: false
   property bool transfersMinimized: false
   property bool transfersAutoOpened: false
@@ -1160,6 +1161,9 @@ Item {
       items.push({ key: "open", label: "Open", glyph: Icons.actionGlyph("open"), hint: "Enter" })
       items.push({ key: "openwith", label: "Open with", glyph: Icons.actionGlyph("open") })
       items.push({ key: "editor", label: "Open in editor", glyph: Icons.actionGlyph("editor") })
+      // Ln.kr row: visible only when exactly one file is selected.
+      if (p.selectedCount === 1 && !entry.isDir && root.boolSetting("lnkrEnabled", false))
+        items.push({ key: "lnkr", label: "", glyph: "", kind: "lnkr" })
       if (entry.isDir)
         items.push({ key: "opentab", label: "Open in new tab", glyph: Icons.actionGlyph("add"), hint: "Ctrl+Enter" })
       else
@@ -1474,6 +1478,11 @@ Item {
     }
     var p = activePane()
     var entry = menuEntry
+    if (key.indexOf("lnkr:") === 0) {
+      var parts = key.split(":")
+      runLnkr(parts[1], parts[2] === "copy")
+      return
+    }
     menuOpen = false
     menuKind = ""
     if (!pickAllows(key)) return
@@ -1525,6 +1534,81 @@ Item {
       showDialog("settings", "Settings", "", null)
     }
     else if (key === "shortcuts") showDialog("shortcuts", "Keyboard shortcuts", "", null)
+  }
+  // Ln.kr / Make previewer links, driven by the lateral linkodec binary.
+  // The binary is resolved on first use (known path, then a lightweight
+  // foldername scan for the rust target) and cached for the session.
+  function lnkrVariant() {
+    var v = service ? service.settingNow("lnkrVariant", "v3") : "v3"
+    v = String(v || "v3")
+    return (v === "v1" || v === "v2" || v === "v3" || v === "v4") ? v : "v3"
+  }
+  function lnkrEncode(path, mode, onDone, onError) {
+    function go() {
+      service.request({ op: "lnkreencode", binary: lnkrBinary, path: path, mode: mode, variant: lnkrVariant() }, {
+        onDone: function (m) {
+          var url = String(m.url || "")
+          if (url === "") { if (onError) onError("no link returned"); return }
+          if (onDone) onDone(url)
+        },
+        onError: function (e) {
+          if (onError) onError(String((e && e.message) || "encode failed"))
+        }
+      })
+    }
+    if (lnkrBinary === "") {
+      service.request({ op: "lnkrresolve" }, {
+        onDone: function (m) {
+          lnkrBinary = String(m.path || "")
+          if (lnkrBinary === "") {
+            statusText = "Ln.kr: the linkodec binary was not found"
+            if (onError) onError("binary not found")
+            return
+          }
+          go()
+        },
+        onError: function () {
+          statusText = "Ln.kr: the binary resolve failed"
+          if (onError) onError("resolve failed")
+        }
+      })
+    } else {
+      go()
+    }
+  }
+  function lnkrKill() {
+    service.request({ op: "lnkrkill" }, {})
+  }
+  function lnkrOpen(url, mode) {
+    if (url.length > 120000) {
+      service.request({ op: "lnkrclipboard", text: url }, {
+        onDone: function () { statusText = "Ln.kr: " + mode + " copied"; lnkrKill() },
+        onError: function (msg) { statusText = "Ln.kr: " + (typeof msg === "string" ? msg : "clipboard failed") }
+      })
+      return
+    }
+    Quickshell.execDetached(["/bin/sh", "-c", "WS=$(hyprctl activeworkspace 2>/dev/null | awk '{print $2}'); H=$(hyprctl windows 2>/dev/null | grep -i helium | grep -c \"$WS\" 2>/dev/null); if [ \"${H:-0}\" -gt 0 ]; then exec helium-browser \"$1\"; else exec helium-browser --new-window \"$1\"; fi", "_", url])
+    statusText = "Ln.kr: " + mode + " opened"
+    lnkrKill()
+  }
+  function runLnkr(mode, copyOnly) {
+    var entry = menuEntry
+    if (!entry || entry.isDir) return
+    menuOpen = false
+    var name = String(entry.name || "")
+    if (copyOnly) {
+      statusText = "Ln.kr: encoding " + name
+      lnkrEncode(entry.path, mode, function (url) {
+        var hash = url.indexOf("#") >= 0 ? url.slice(url.indexOf("#")) : url
+        service.copyToClipboardText(hash)
+        statusText = "Ln.kr: hashtag copied"
+      }, function (msg) { statusText = "Ln.kr: " + msg })
+      return
+    }
+    statusText = "Ln.kr: encoding " + name
+    lnkrEncode(entry.path, mode, function (url) {
+      lnkrOpen(url, mode)
+    }, function (msg) { statusText = "Ln.kr: " + msg })
   }
   function runZoom(action) {
     if (action === "in") nudgeViewScale(0.1)
@@ -2890,17 +2974,18 @@ Item {
             required property int index
             readonly property bool isHeader: modelData.kind === "header"
             readonly property bool isZoom: modelData.kind === "zoom"
+            readonly property bool isLnkr: modelData.kind === "lnkr"
             readonly property bool highlighted: !modelData.disabled && !isHeader
               && (root.menuCursor === index || (itemHover.hovered && !isZoom))
             width: menuColumn.width
-            height: modelData.label === "" ? Style.space(7)
+            height: modelData.label === "" ? (isLnkr ? Style.space(24) : Style.space(7))
               : (isHeader ? Style.space(20) : Style.space(24))
 
             Rectangle {
               anchors.centerIn: parent
               width: parent.width - Style.space(8)
               height: 1
-              visible: modelData.label === ""
+              visible: modelData.label === "" && !menuRow.isLnkr
               color: Util.alpha(Color.menu.text, 0.15)
             }
 
@@ -3012,6 +3097,48 @@ Item {
                       anchors.fill: parent
                       enabled: !parent.atLimit
                       onClicked: root.runZoom(modelData.action)
+                    }
+                  }
+                }
+              }
+            }
+            Row {
+              anchors.horizontalCenter: parent.horizontalCenter
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: 0
+              visible: menuRow.isLnkr
+              Repeater {
+                model: [
+                  { mode: "rich", label: "link", first: true },
+                  { mode: "safe", label: "safe", first: false },
+                  { mode: "make", label: "make", first: false }
+                ]
+                delegate: Row {
+                  required property var modelData
+                  spacing: 0
+                  Text {
+                    textFormat: Text.PlainText
+                    visible: !modelData.first
+                    text: "   |   "
+                    color: Util.alpha(Color.menu.text, 0.4)
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+                  Text {
+                    textFormat: Text.PlainText
+                    text: modelData.label
+                    color: lnkrItemHover.hovered ? Color.menu.selectedText : Color.menu.text
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    anchors.verticalCenter: parent.verticalCenter
+                    HoverHandler { id: lnkrItemHover }
+                    MouseArea {
+                      anchors.fill: parent
+                      onClicked: function (mouse) {
+                        var copyOnly = (mouse.modifiers & Qt.ShiftModifier) !== 0
+                        root.runLnkr(modelData.mode, copyOnly)
+                      }
                     }
                   }
                 }
@@ -4020,6 +4147,42 @@ Item {
                     font.pixelSize: Style.font.caption
                   }
                 }
+                Column {
+                  width: settingsColumn.width
+                  spacing: Style.space(4)
+                  visible: root.settingsSection === "linkoder"
+
+                  Toggle {
+                    width: parent.width
+                    label: "Enable Linkoder"
+                    description: "Show the ln.kr encode row in the context menu"
+                    checked: root.boolSetting("lnkrEnabled", false)
+                    onClicked: root.applySettingNow("lnkrEnabled", !checked)
+                  }
+
+                  Dropdown {
+                    width: parent.width
+                    label: "Ln.kr version"
+                    value: root.textSetting("lnkrVariant", "v3")
+                    options: [
+                      { label: "v1", value: "v1" },
+                      { label: "v2", value: "v2" },
+                      { label: "v3", value: "v3" },
+                      { label: "v4", value: "v4" }
+                    ]
+                    onChanged: function (v) { root.applySettingNow("lnkrVariant", v) }
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    visible: root.boolSetting("lnkrEnabled", false) && root.lnkrBinary === ""
+                    text: "Binary not yet resolved"
+                    color: Util.alpha(Color.popups.text, 0.5)
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
+                }
               }
             }
           }
@@ -4388,7 +4551,8 @@ Item {
       { key: "deleting", label: "Deleting" },
       { key: "commands", label: "Commands" },
       { key: "bar", label: "Bar and trash" },
-      { key: "drives", label: "Drives" }
+      { key: "drives", label: "Drives" },
+      { key: "linkoder", label: "Linkoder" }
     ]
   }
 
@@ -4445,6 +4609,12 @@ Item {
     } else if (key === "thumbnails") {
       paneA.thumbnails = value
       if (split) paneB.thumbnails = value
+    } else if (key === "lnkrEnabled" && value === true) {
+      lnkrBinary = ""
+      service.request({ op: "lnkrresolve" }, {
+        onDone: function (m) { lnkrBinary = String(m.path || "") },
+        onError: function () { lnkrBinary = "" }
+      })
     }
     rememberSession()
   }

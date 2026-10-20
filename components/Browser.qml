@@ -376,7 +376,7 @@ Item {
   property int pickFilter: -1
   readonly property var pickBlockedActions: ({
     cut: true, paste: true, rename: true, trash: true, delete: true, restore: true, emptytrash: true,
-    extract: true, compress: true, properties: true, newfile: true, terminal: true, agent: true,
+    extract: true, compress: true, transcode: true, properties: true, newfile: true, terminal: true, agent: true,
     openwith: true, editor: true, undo: true, redo: true, drop: true, transfer: true,
     "place:emptytrash": true, "place:properties": true
   })
@@ -711,6 +711,12 @@ Item {
       if (place && place.path) service.renameBookmark(place.path, value)
       return
     }
+    if (dialogMode === "transcode") {
+      var payload = dialogPayload
+      closeDialog()
+      if (payload && payload.targets) transcodeNow(payload.targets)
+      return
+    }
     if (!value) {
       dialogError = "Name cannot be empty"
       return
@@ -1031,6 +1037,10 @@ Item {
   }
 
   property string compressFormat: ".zip"
+  property string transcodeFormat: ""
+  property string transcodeResolution: ""
+  property var transcodeFormats: []
+  property var transcodeResolutions: []
 
   function compressTargets(entry) {
     var p = activePane()
@@ -1073,6 +1083,62 @@ Item {
     })
   }
 
+  function openWithTargets(entry) {
+    var p = activePane()
+    if (!entry) return []
+    if (!p) return [entry]
+    var sel = p.selectedEntries
+    for (var i = 0; i < sel.length; i++) if (sel[i].path === entry.path) return sel
+    return [entry]
+  }
+
+  function transcodeTargets(entry) {
+    var list = openWithTargets(entry)
+    var out = []
+    for (var i = 0; i < list.length; i++)
+      if (Model.isTranscodable(list[i])) out.push(list[i])
+    return out
+  }
+
+  function askTranscode(entry) {
+    if (!pickAllows("transcode")) return
+    var targets = transcodeTargets(entry)
+    if (targets.length === 0) return
+    if (Model.transcodeMediaType(targets[0]) === "video") {
+      transcodeFormats = [{ label: "MP4, plays anywhere", value: "mp4" }, { label: "GIF, for chat and docs", value: "gif" }]
+      transcodeResolutions = [{ label: "4K", value: "4k" }, { label: "1080p", value: "1080p" }, { label: "720p", value: "720p" }]
+      transcodeFormat = "mp4"
+      transcodeResolution = "1080p"
+    } else {
+      transcodeFormats = [{ label: "JPG, smaller", value: "jpg" }, { label: "PNG, lossless", value: "png" }]
+      transcodeResolutions = [{ label: "High", value: "high" }, { label: "Medium", value: "medium" }, { label: "Low", value: "low" }]
+      transcodeFormat = "jpg"
+      transcodeResolution = "medium"
+    }
+    showDialog("transcode", "Transcode " + (targets.length === 1 ? targets[0].name : Model.formatCount(targets.length, "item", "items")),
+      "", { targets: targets })
+  }
+
+  function transcodeNow(targets) {
+    var p = activePane()
+    var paths = []
+    for (var i = 0; i < targets.length; i++) paths.push(targets[i].path)
+    statusText = "Transcoding " + Model.formatCount(targets.length, "item", "items")
+    service.transcodePaths(paths, transcodeFormat, transcodeResolution, function (m) {
+      var outputs = m.outputs || []
+      root.statusText = "Transcoded " + Model.formatCount(outputs.length, "file", "files")
+      p.refresh()
+      if (outputs.length === 1) {
+        selectTimer.pendingName = Model.basename(String(outputs[0]))
+        selectTimer.pendingPane = p
+        selectTimer.restart()
+      }
+    }, function (m) {
+      root.statusText = m && m.code === "ECANCELED" ? "Transcoding cancelled"
+        : "Could not transcode: " + String((m && m.message) || "")
+    })
+  }
+
   function afterLaunch() {
     if (popupMode) requestClose()
   }
@@ -1110,6 +1176,8 @@ Item {
       items.push({ key: "rename", label: "Rename", glyph: Icons.actionGlyph("rename"), hint: "F2" })
       if (archiveTargets(entry).length > 0)
         items.push({ key: "extract", label: "Extract here", glyph: Icons.actionGlyph("extract") })
+      if (transcodeTargets(entry).length > 0)
+        items.push({ key: "transcode", label: "Transcode\u2026", glyph: Icons.actionGlyph("extract") })
       if (compressTargets(entry).length > 0)
         items.push({ key: "compress", label: "Compress\u2026", glyph: Icons.actionGlyph("extract") })
       if (entry.isDir) {
@@ -1412,9 +1480,24 @@ Item {
     if (key.indexOf("sort:") === 0) applySortPreset(key.substring(5))
     else if (key.indexOf("view:") === 0) setView(key.substring(5))
     else if (key === "preview") showPreview(entry)
-    else if (key === "open") p.openEntry(entry)
-    else if (key === "openwith") showDialog("openwith", "Open " + (entry ? entry.name : "") + " with", "", entry)
-    else if (key === "editor") { service.openEditor(entry ? entry.path : p.path); afterLaunch() }
+    else if (key === "open") {
+      var ot = entry ? openWithTargets(entry) : null
+      if (ot && ot.length > 1) openEntries(ot)
+      else p.openEntry(entry)
+    }
+    else if (key === "openwith") {
+      var owt = entry ? openWithTargets(entry) : [entry]
+      showDialog("openwith", "Open " + (owt.length > 1 ? Model.formatCount(owt.length, "item", "items") : (entry ? entry.name : "")) + " with", "", entry)
+    }
+    else if (key === "editor") {
+      var et = entry ? openWithTargets(entry) : null
+      if (et && et.length > 1 && !et[0].isDir) {
+        var epaths = []
+        for (var i = 0; i < et.length; i++) epaths.push(et[i].path)
+        service.openEditorFiles(epaths)
+      } else service.openEditor(entry ? entry.path : p.path)
+      afterLaunch()
+    }
     else if (key === "opentab") newTab(activeSide, entry.path)
     else if (key === "copy") doCopy()
     else if (key === "cut") doCut()
@@ -1426,6 +1509,7 @@ Item {
     else if (key === "emptytrash") askEmptyTrash()
     else if (key === "copypath") service.copyToClipboardText(entry ? entry.path : p.path)
     else if (key === "extract") extractArchives(archiveTargets(entry))
+    else if (key === "transcode") askTranscode(entry)
     else if (key === "compress") askCompress(entry)
     else if (key === "properties") showProperties(entry)
     else if (key === "newfolder") showDialog("newfolder", "New folder", "untitled folder", null)
@@ -1449,6 +1533,14 @@ Item {
   }
   property bool previewOpen: false
   property var previewEntry: null
+  property real previewZoom: 1
+  property real previewPanX: 0
+  property real previewPanY: 0
+  function onPreviewEntryChanged() {
+    previewZoom = 1
+    previewPanX = 0
+    previewPanY = 0
+  }
   property string previewText: ""
   property bool previewBinary: false
   property bool previewTruncated: false
@@ -1468,6 +1560,8 @@ Item {
       return "remoteaudio"
     return kind
   }
+
+  readonly property bool fullResPreview: boolSetting("fullResPreview", false)
 
   function showPreview(entry) {
     if (!entry) return
@@ -1811,13 +1905,15 @@ Item {
   function openEntries(sel) {
     var dirs = []
     var archives = []
+    var files = []
     for (var i = 0; i < sel.length; i++) {
       if (sel[i].isDir && !sel[i].isBroken) dirs.push(sel[i].path)
       else if (extractsOnOpen(sel[i])) archives.push(sel[i])
-      else if (service) service.openExternally(sel[i].path)
+      else files.push(sel[i].path)
     }
     for (var d = 0; d < dirs.length; d++) newTab(activeSide, dirs[d])
     extractArchives(archives)
+    if (files.length && service) service.openExternallyFiles(files)
     if (archives.length < sel.length) afterLaunch()
   }
 
@@ -1922,7 +2018,11 @@ Item {
     var typed = appFilter
     closeDialog()
     if (!entry || !service) return
-    service.runCommandOn(typed, entry.path)
+    var targets = openWithTargets(entry)
+    var tpaths = []
+    for (var i = 0; i < targets.length; i++) tpaths.push(targets[i].path)
+    lastLaunchMs = Date.now()
+    service.runCommandOnFiles(typed, tpaths)
     afterLaunch()
   }
 
@@ -1943,7 +2043,11 @@ Item {
     var entry = dialogPayload
     closeDialog()
     if (!entry || !service) return
-    service.openWith(command, entry.path, inTerminal)
+    var targets = openWithTargets(entry)
+    var tpaths = []
+    for (var i = 0; i < targets.length; i++) tpaths.push(targets[i].path)
+    lastLaunchMs = Date.now()
+    service.openWithFiles(command, tpaths, inTerminal)
     if (appAlways && app.id && !entry.isDir)
       service.setDefaultApp(entry.path, String(app.id), null, function (m) {
         root.statusText = "Could not set the default app: " + String((m && m.message) || "")
@@ -1978,6 +2082,9 @@ Item {
       if (event.key === Qt.Key_Down) { moveAppCursor(1); return true }
       if (event.key === Qt.Key_Up) { moveAppCursor(-1); return true }
       if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { chooseApp(); return true }
+    }
+    if (dialogMode === "transcode") {
+      if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { submitDialog(); return true }
     }
     if (dialogMode === "settings" || dialogMode === "shortcuts" || dialogMode === "properties") {
       if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { closeDialog(); return true }
@@ -2037,6 +2144,10 @@ Item {
     var ctrl = (event.modifiers & Qt.ControlModifier) !== 0
     var shiftKey = (event.modifiers & Qt.ShiftModifier) !== 0
     var alt = (event.modifiers & Qt.AltModifier) !== 0
+
+    if (Date.now() - lastLaunchMs < launchKeyDelay
+        && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Space))
+      return true
 
     if (event.key === Qt.Key_Escape) {
       if (p.searching || findMode) { exitFind(); return true }
@@ -2934,7 +3045,49 @@ Item {
         border.color: Color.popups.border
         radius: Style.cornerRadius
 
-        MouseArea { anchors.fill: parent }
+        MouseArea {
+          anchors.fill: parent
+          hoverEnabled: true
+          cursorShape: pressed ? Qt.SizeAllCursor : Qt.ArrowCursor
+          property real dragStartX: 0
+          property real dragStartY: 0
+          onPressed: function (mouse) {
+            if (mouse.button !== Qt.LeftButton || !previewFullImage.visible) return
+            dragStartX = mouse.x
+            dragStartY = mouse.y
+          }
+          onPositionChanged: function (mouse) {
+            if (!pressed || !previewFullImage.visible) return
+            root.previewPanX += mouse.x - dragStartX
+            root.previewPanY += mouse.y - dragStartY
+            dragStartX = mouse.x
+            dragStartY = mouse.y
+          }
+          onWheel: function (wheel) {
+            if (!previewFullImage.visible) return
+            var nz = root.previewZoom * (wheel.angleDelta.y > 0 ? 1.25 : 0.8)
+            nz = Math.max(1, Math.min(8, nz))
+            if (nz === root.previewZoom) return
+            var nx, ny
+            if (nz <= 1.0001) {
+              nz = 1
+              nx = 0
+              ny = 0
+            } else {
+              nx = wheel.x - previewBody.x - (wheel.x - previewBody.x - root.previewPanX) * (nz / root.previewZoom)
+              ny = wheel.y - previewBody.y - (wheel.y - previewBody.y - root.previewPanY) * (nz / root.previewZoom)
+            }
+            root.previewZoom = nz
+            root.previewPanX = nx
+            root.previewPanY = ny
+          }
+          onDoubleClicked: function () {
+            if (!previewFullImage.visible) return
+            root.previewZoom = 1
+            root.previewPanX = 0
+            root.previewPanY = 0
+          }
+        }
 
         Item {
           id: previewHeader
@@ -3010,12 +3163,28 @@ Item {
             objectName: "previewImage"
             anchors.fill: parent
             service: root.service
-            active: root.previewOpen && root.previewKind === "image"
+            active: root.previewOpen && root.previewKind === "image" && !root.fullResPreview
             entry: active ? root.previewEntry : null
             generated: active && root.previewThumbable()
             requestSize: 1024
             sourceSize.width: Math.max(1, previewBody.width * 2)
             sourceSize.height: Math.max(1, previewBody.height * 2)
+          }
+
+          Image {
+            id: previewFullImage
+            objectName: "previewFullImage"
+            anchors.fill: parent
+            visible: root.previewOpen && root.previewKind === "image" && root.fullResPreview && root.previewEntry !== null
+            source: visible ? Util.fileUrl(String(root.previewEntry.path)) : ""
+            fillMode: Image.PreserveAspectFit
+            asynchronous: true
+            cache: false
+            smooth: true
+            transform: [
+              Scale { xScale: root.previewZoom; yScale: root.previewZoom },
+              Translate { x: root.previewPanX; y: root.previewPanY }
+            ]
           }
 
           Flickable {
@@ -3079,7 +3248,7 @@ Item {
             spacing: Style.space(10)
             visible: root.previewKind === "folder" || root.previewKind === "none" || root.previewKind === "remoteaudio"
               || (root.previewKind === "text" && (root.previewBinary || root.previewLoading))
-              || (root.previewKind === "image" && previewImage.status !== Image.Ready)
+              || (root.previewKind === "image" && (root.fullResPreview ? previewFullImage.status !== Image.Ready : previewImage.status !== Image.Ready))
               || (root.previewKind === "audio" && audioPreview.status === Loader.Error)
 
             Text {
@@ -3095,12 +3264,13 @@ Item {
               textFormat: Text.PlainText
               anchors.horizontalCenter: parent.horizontalCenter
               text: root.previewLoading ? "Reading"
+                : (root.previewKind === "image" && root.fullResPreview && previewFullImage.status !== Image.Ready ? "Loading"
                 : (root.previewKind === "image" && !previewImage.failed && root.previewThumbable() ? "Making a preview"
                 : (root.previewKind === "image" ? "No preview for this image. Turn on Previews and thumbnails, or install a thumbnailer for it"
                 : (root.previewKind === "folder" ? "Folder. Press Enter to open it."
                   : (root.previewKind === "remoteaudio" ? "Audio preview is off for network folders. Press Enter to open it."
                   : (root.previewKind === "audio" ? "Playing audio here needs the qt6-multimedia package"
-                    : "No preview for this kind of file")))))
+                    : "No preview for this kind of file"))))))
               color: Util.alpha(Color.popups.text, 0.55)
               font.family: Style.font.family
               font.pixelSize: Style.font.body
@@ -3184,6 +3354,26 @@ Item {
               { label: ".7z, smallest, needs 7-Zip on Windows", value: ".7z" }
             ]
             onChanged: function (v) { root.compressFormat = v }
+          }
+
+          Dropdown {
+            objectName: "transcodeFormat"
+            width: parent.width
+            visible: root.dialogMode === "transcode"
+            label: "Format"
+            value: root.transcodeFormat
+            options: root.transcodeFormats
+            onChanged: function (v) { root.transcodeFormat = v }
+          }
+
+          Dropdown {
+            objectName: "transcodeResolution"
+            width: parent.width
+            visible: root.dialogMode === "transcode"
+            label: "Resolution"
+            value: root.transcodeResolution
+            options: root.transcodeResolutions
+            onChanged: function (v) { root.transcodeResolution = v }
           }
 
           Text {
@@ -4034,7 +4224,8 @@ Item {
                 : (root.dialogMode === "connect" ? "Connect"
                   : (root.dialogMode === "unlock" ? "Unlock"
                     : (root.dialogMode === "openwith" ? "Open"
-                      : (root.dialogMode === "compress" ? "Compress" : "Confirm"))))
+                      : (root.dialogMode === "compress" ? "Compress"
+                        : (root.dialogMode === "transcode" ? "Transcode" : "Confirm")))))
               bordered: true
               onClicked: {
                 if (root.isReadOnlyDialog()) root.closeDialog()
@@ -4209,6 +4400,8 @@ Item {
         description: "List folders above files whatever the sort order" },
       { key: "thumbnails", label: "Previews and thumbnails",
         description: "Show images, video frames and document pages instead of a generic icon" },
+      { key: "fullResPreview", label: "Full-resolution image previews", fallback: false,
+        description: "Preview images at their original size instead of the 1024 px thumbnail" },
       { key: "rememberFolderViews", label: "Remember the view for each folder",
         description: "A folder opens in the view you last picked there. Other folders open in the default view" },
       { key: "extractOnOpen", label: "Extract archives when opened", fallback: false,
@@ -4274,6 +4467,8 @@ Item {
   property var pendingConflicts: []
   property double conflictShownMs: 0
   readonly property int conflictKeyDelay: 600
+  property double lastLaunchMs: 0
+  readonly property int launchKeyDelay: 600
 
   function presentConflict(jobId, info) {
     if (dialogMode !== "" || confirm.opened) {

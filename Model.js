@@ -718,6 +718,63 @@ function expandFieldCodes(command, path) {
   return out;
 }
 
+function expandFieldCodesMulti(command, paths) {
+  var list = paths && paths.length ? paths : [undefined];
+  var out = [];
+  var used = false;
+  var length = command && command.length ? command.length : 0;
+  for (var i = 0; i < length; i++) {
+    var arg = String(command[i]);
+    var inScript = isShellScriptArg(command, i);
+    var prefix = '';
+    var suffix = '';
+    var sawCode = false;
+    for (var j = 0; j < arg.length; j++) {
+      var ch = arg.charAt(j);
+      if (ch !== '%') {
+        if (sawCode) suffix += ch; else prefix += ch;
+        continue;
+      }
+      var code = arg.charAt(j + 1);
+      if (code === '') {
+        if (sawCode) suffix += '%'; else prefix += '%';
+        continue;
+      }
+      j++;
+      if (code === '%') {
+        if (sawCode) suffix += '%'; else prefix += '%';
+        continue;
+      }
+      if (code === 'f' || code === 'F' || code === 'u' || code === 'U') {
+        sawCode = true;
+        used = true;
+      }
+    }
+    if (sawCode) {
+      var parts = [];
+      for (var m = 0; m < list.length; m++)
+        parts.push(list[m] === undefined || list[m] === null ? '' : String(list[m]));
+      if (inScript) {
+        var quoted = [];
+        for (var q = 0; q < parts.length; q++) quoted.push(shellQuote(parts[q]));
+        out.push(prefix + quoted.join(' ') + suffix);
+      } else {
+        if (prefix !== '') out.push(prefix);
+        for (var p = 0; p < parts.length; p++) out.push(parts[p]);
+        if (suffix !== '') out.push(suffix);
+      }
+    } else if (prefix !== '') {
+      out.push(prefix);
+    }
+  }
+  if (out.length === 0) return [];
+  if (!used) {
+    for (var n = 0; n < list.length; n++)
+      out.push(list[n] === undefined || list[n] === null ? '' : String(list[n]));
+  }
+  return out;
+}
+
 function tokenizeCommand(text) {
   var source = text === undefined || text === null ? '' : String(text);
   var out = [];
@@ -948,6 +1005,20 @@ function previewKind(entry) {
   if (imageExtSet[ext]) return (Number(entry.size) || 0) > imagePreviewLimit ? 'none' : 'image';
   if (audioExtSet[ext]) return 'audio';
   return 'text';
+}
+
+var transcodePictureExts = toSet(['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'avif']);
+var transcodeVideoExts = toSet(['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi']);
+
+function isTranscodable(entry) {
+  if (!entry || entry.isDir) return false;
+  var ext = String(entry.ext || '').toLowerCase();
+  return !!transcodePictureExts[ext] || !!transcodeVideoExts[ext];
+}
+
+function transcodeMediaType(entry) {
+  var ext = String((entry && entry.ext) || '').toLowerCase();
+  return transcodeVideoExts[ext] ? 'video' : 'picture';
 }
 
 function outputVolume(sliderValue) {

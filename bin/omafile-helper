@@ -1839,6 +1839,133 @@ def op_setopener(req):
         return
     send_done(req_id, mime=mime, handler=handler)
 
+_DESKTOP_DIRS = None
+_DETACHED = []
+
+
+def desktop_search_dirs():
+    global _DESKTOP_DIRS
+    if _DESKTOP_DIRS is None:
+        dirs = []
+        data_home = os.environ.get("XDG_DATA_HOME")
+        if data_home:
+            dirs.append(data_home)
+        else:
+            dirs.append(os.path.join(os.path.expanduser("~"), ".local", "share"))
+        for base in os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(os.pathsep):
+            if base:
+                dirs.append(base)
+        _DESKTOP_DIRS = dirs
+    return _DESKTOP_DIRS
+
+
+def find_desktop_file(desktop_id):
+    for base in desktop_search_dirs():
+        candidate = os.path.join(base, "applications", desktop_id)
+        if os.path.isfile(candidate):
+            return candidate
+    return ""
+
+
+def parse_desktop_exec(path):
+    # The last Exec= line wins, per the desktop file spec.
+    exec_line = ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith("Exec="):
+                    exec_line = line[len("Exec="):].strip()
+    except OSError:
+        return ""
+    # A leading URL (e.g. "c://") is not part of the command.
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", exec_line):
+        exec_line = exec_line.split("://", 1)[1].lstrip()
+    return exec_line
+
+
+def reap_detached():
+    alive = []
+    for proc in _DETACHED:
+        if proc.poll() is None:
+            alive.append(proc)
+    _DETACHED[:] = alive
+
+
+def op_openfiles(req):
+    """Launch the default application once for a whole selection.
+
+    `gio open p1 p2 ...` spawns the app once per file (stacked windows);
+    this resolves the default app for the first file, expands its desktop
+    Exec line for a multi-file launch, and starts it a single time, the way
+    Nautilus does.
+    """
+    req_id = req["id"]
+    paths = req.get("paths")
+    if not isinstance(paths, list) or not paths:
+        send_error(req_id, "EINVAL", "a list of absolute paths is required")
+        return
+    clean = []
+    for p in paths:
+        if isinstance(p, str) and os.path.isabs(p) and os.path.isfile(p):
+            clean.append(p)
+    if not clean:
+        send_error(req_id, "ENOENT", "no regular files to open")
+        return
+    mime = gio_content_type(clean[0])
+    if not mime:
+        mime = mimetypes.guess_type(os.path.basename(clean[0]))[0] or ""
+    handler = gio_default_app(mime) if mime else ""
+    if not handler:
+        send_error(req_id, "ENOENT", "no default application for " + (mime or clean[0]))
+        return
+    desktop = find_desktop_file(handler)
+    if not desktop:
+        send_error(req_id, "ENOENT", "desktop file not found: " + handler)
+        return
+    exec_line = parse_desktop_exec(desktop)
+    if not exec_line:
+        send_error(req_id, "EINTERNAL", "no Exec line in " + handler)
+        return
+    uris = ["file://" + urllib.parse.quote(p, safe="/") for p in clean]
+    app_class = handler[:-len(".desktop")].lower()
+    line = exec_line.replace("%%", "\x00")
+    if "%U" in line:
+        # %U takes the first URI; the remaining URIs are appended after it.
+        idx = line.index("%U")
+        line = line[:idx] + shlex.quote(uris[0]) + line[idx + 2:]
+        argv = shlex.split(line)
+        argv.extend(uris[1:])
+    else:
+        for code, value in (
+            ("F", " ".join(shlex.quote(p) for p in clean)),
+            ("f", shlex.quote(clean[0])),
+            ("u", uris[0]),
+            ("c", app_class),
+        ):
+            line = line.replace("%" + code, value)
+        argv = shlex.split(line)
+    for j in range(len(argv)):
+        argv[j] = argv[j].replace("\x00", "%")
+    if not argv:
+        send_error(req_id, "EINTERNAL", "empty command in " + handler)
+        return
+    try:
+        proc = subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            start_new_session=True,
+            env=trusted_env())
+    except (OSError, ValueError) as e:
+        send_error(req_id, errno_code(e) if isinstance(e, OSError) else "EINTERNAL",
+                   str(e) or "launch failed")
+        return
+    reap_detached()
+    _DETACHED.append(proc)
+    send_done(req_id, opened=len(clean))
 def op_symlink(req):
     req_id = req["id"]
     target = req.get("target")
@@ -4299,6 +4426,69 @@ def op_compress(req, cancel_event):
             except OSError:
                 pass
         os.close(pfd)
+TRANSCODE_FORMATS = ("jpg", "png", "mp4", "gif")
+TRANSCODE_RESOLUTIONS = ("high", "medium", "low", "4k", "1080p", "720p")
+
+
+def op_transcode(req, cancel_event):
+    req_id = req["id"]
+    paths = req.get("paths")
+    fmt = req.get("format")
+    res = req.get("resolution")
+    if (not isinstance(paths, list) or not paths
+            or not all(isinstance(p, str) and os.path.isabs(p) for p in paths)
+            or fmt not in TRANSCODE_FORMATS or res not in TRANSCODE_RESOLUTIONS):
+        send_error(req_id, "EINVAL",
+                   "absolute paths, a format (jpg, png, mp4, gif) and a resolution "
+                   "(high, medium, low, 4k, 1080p, 720p) are required")
+        return
+    try:
+        trusted_program("omarchy-transcode")
+    except FileNotFoundError:
+        send_error(req_id, "EUNSUPPORTED", "omarchy-transcode is not installed")
+        return
+    outputs = []
+    for index, raw in enumerate(paths):
+        if cancel_event is not None and cancel_event.is_set():
+            send_error(req_id, "ECANCELED", "cancelled")
+            return
+        path = os.path.normpath(raw)
+        if not os.path.isfile(path):
+            send_error(req_id, "ENOENT", "no such file", path)
+            return
+        emit({"id": req_id, "t": "progress", "files": index, "filesTotal": len(paths),
+              "current": os.path.basename(path)})
+        # The CLI copies its result to the clipboard, which forks a persistent
+        # wl-copy daemon. Running it directly would leave the daemon holding
+        # this helper's stdout/stderr pipes open, so run it through bash with
+        # its stdio redirected to a temp file; the daemon inherits the file
+        # descriptors, not the pipes.
+        errfd, errfile = tempfile.mkstemp(prefix=".omafile-transcode-")
+        os.close(errfd)
+        try:
+            proc = run_trusted("bash", ["-c",
+                "exec omarchy-transcode \"$1\" \"$2\" \"$3\" >\"$4\" 2>&1",
+                "omafile-transcode", path, fmt, res, errfile], timeout=600)
+            message = ""
+            try:
+                with open(errfile, "r", encoding="utf-8", errors="replace") as fh:
+                    message = fh.read().strip()
+            except OSError:
+                pass
+        finally:
+            try:
+                os.unlink(errfile)
+            except OSError:
+                pass
+        if cancel_event is not None and cancel_event.is_set():
+            send_error(req_id, "ECANCELED", "cancelled")
+            return
+        if proc.returncode != 0:
+            send_error(req_id, "ETRANSCODE", message or "transcode failed", path)
+            return
+        stem = os.path.splitext(os.path.basename(path))[0]
+        outputs.append(os.path.join(os.path.dirname(path), stem + "-" + res + "." + fmt))
+    send_done(req_id, outputs=outputs)
 
 
 CANCELLABLE_OPS = {
@@ -4319,6 +4509,7 @@ CANCELLABLE_OPS = {
     "counts": op_counts,
     "extract": op_extract,
     "compress": op_compress,
+    "transcode": op_transcode,
 }
 
 SIMPLE_OPS = {
@@ -4344,6 +4535,7 @@ SIMPLE_OPS = {
     "identity": op_identity,
     "opener": op_opener,
     "setopener": op_setopener,
+    "openfiles": op_openfiles,
     "chmod": op_chmod,
     "chown": op_chown,
     "symlink": op_symlink,

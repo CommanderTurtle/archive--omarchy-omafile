@@ -1170,6 +1170,37 @@ Item {
     return id
   }
 
+  function transcodePaths(paths, format, resolution, onDone, onError) {
+    var folder = Model.dirname(paths[0])
+    var record = {
+      id: 0, op: "transcode", label: resolution + " " + format, dest: folder, state: "running",
+      bytes: 0, total: 0, files: 0, filesTotal: paths.length, current: "", rate: 0,
+      errors: [], startedMs: Date.now(), finishedMs: 0, count: paths.length, from: folder
+    }
+    var id = request({ op: "transcode", paths: paths, format: format, resolution: resolution }, {
+      onData: function (m) {
+        if (m.t === "progress") updateTransfer(m.id, {
+          files: Number(m.files) || 0, current: String(m.current || "")
+        })
+      },
+      onDone: function (m) {
+        updateTransfer(m.id, { state: "done", result: String((m.outputs && m.outputs[0]) || "") })
+        trimTransferHistory()
+        if (onDone) onDone(m)
+      },
+      onError: function (m) {
+        updateTransfer(m.id, { state: m.code === "ECANCELED" ? "cancelled" : "failed", message: String(m.message || "") })
+        trimTransferHistory()
+        if (onError) onError(m)
+      }
+    })
+    record.id = id
+    var next = transfers.slice()
+    next.push(record)
+    transfers = next
+    return id
+  }
+
   function extractArchive(path, onDone, onError) {
     var folder = Model.dirname(path)
     var record = {
@@ -1206,8 +1237,29 @@ Item {
     Quickshell.execDetached(["gio", "open", path])
   }
 
-  function openWith(command, path, inTerminal) {
-    var argv = Model.expandFieldCodes(command, path)
+  function openExternallyFiles(paths) {
+    var list = [];
+    for (var i = 0; i < paths.length; i++)
+      if (paths[i]) list.push(String(paths[i]));
+    if (list.length === 0) return;
+    if (list.length === 1) {
+      Quickshell.execDetached(["gio", "open", list[0]]);
+      return;
+    }
+    // `gio open p1 p2 ...` spawns the default app once per file (stacked
+    // windows). Launch the app a single time with the whole selection, the
+    // way Nautilus does; fall back to the per-file launch if that fails.
+    request({ op: "openfiles", paths: list }, {
+      onError: function () {
+        var argv = ["gio", "open"]
+        for (var j = 0; j < list.length; j++) argv.push(list[j])
+        Quickshell.execDetached(argv)
+      }
+    })
+  }
+
+  function openWithFiles(command, paths, inTerminal) {
+    var argv = Model.expandFieldCodesMulti(command, paths)
     if (argv.length === 0) return
     if (inTerminal) argv = ["xdg-terminal-exec"].concat(argv)
     Quickshell.execDetached(argv)
@@ -1224,10 +1276,10 @@ Item {
     })
   }
 
-  function runCommandOn(text, path) {
+  function runCommandOnFiles(text, paths) {
     var argv = Model.tokenizeCommand(text)
     if (argv.length === 0) return false
-    argv.push(String(path))
+    for (var i = 0; i < paths.length; i++) argv.push(String(paths[i]))
     Quickshell.execDetached(argv)
     return true
   }
@@ -1247,6 +1299,12 @@ Item {
     var configured = String(settingNow("editor", "") || "").trim()
     if (configured) Quickshell.execDetached(["sh", "-c", configured + " \"$1\"", "omafile", path])
     else Quickshell.execDetached(["omarchy-launch-editor", path])
+  }
+
+  function openEditorFiles(paths) {
+    var configured = String(settingNow("editor", "") || "").trim()
+    if (configured) Quickshell.execDetached(["sh", "-c", configured + " \"$@\"", "omafile"].concat(paths))
+    else Quickshell.execDetached(["omarchy-launch-editor"].concat(paths))
   }
 
   function copyToClipboardText(text) {

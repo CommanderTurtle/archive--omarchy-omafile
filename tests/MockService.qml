@@ -158,6 +158,7 @@ QtObject {
   function setDefaultApp(path, desktopId) { record("setDefaultApp", [path, desktopId]) }
   function runCommandOn(text, path) { record("runCommandOn", [text, path]); return true }
   function openExternally(path) { record("openExternally", [path]) }
+  function openExternallyFiles(paths) { record("openExternallyFiles", [paths]) }
   property bool agentAvailable: false
   property string agentName: "Claude Code"
   function openEditor(path) { record("openEditor", [path]) }

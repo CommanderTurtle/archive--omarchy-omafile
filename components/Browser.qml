@@ -602,6 +602,10 @@ Item {
   }
   function showDialog(mode, title, value, payload) {
     if (dialogMode === "unlock") forgetUnlock()
+    if (mode === "settings") {
+      editorOwnTyping = false
+      if (service) service.refreshDefaults()
+    }
     dialogMode = mode
     dialogTitle = title
     dialogValue = value || ""
@@ -637,6 +641,9 @@ Item {
       } else if (dialogMode === "unlock") {
         root.forgetPassphrase()
         unlockField.forceActiveFocus()
+      } else if (dialogMode === "editorpick") {
+        editorCustomField.text = ""
+        keyCatcher.forceActiveFocus()
       }
     })
   }
@@ -1181,6 +1188,140 @@ Item {
   function afterLaunch() {
     if (popupMode) requestClose()
   }
+
+  property string editorPick: "omarchy"
+  property bool editorPickAlso: false
+  property string editorPickError: ""
+  property bool editorOwnTyping: false
+  readonly property bool editorPickCanAlso: {
+    if (editorPick.indexOf("app:") !== 0 || !service) return false
+    var known = Model.knownEditor(editorPick.substring(4))
+    return known !== null && known.omarchy === true && known.id !== service.omarchyEditor
+  }
+  readonly property string editorSettingValue: {
+    if (!service) return ""
+    if (service.editorChoice === "omarchy") return "omarchy"
+    var command = service.editorCommand
+    if (!editorOwnTyping && command && Model.knownEditor(command) && service.programsFound[command] === true) return "app:" + command
+    return command || editorOwnTyping ? "own" : ""
+  }
+
+  function requestEditor(paths) {
+    if (!service || paths.length === 0) return
+    service.editorPlan(function (plan) {
+      if (plan.ask) {
+        root.askEditor(paths, String(plan.error || ""))
+        return
+      }
+      service.launchEditor(plan, paths)
+      root.afterLaunch()
+    })
+  }
+
+  function askEditor(paths, badCommand) {
+    if (service) service.refreshDefaults()
+    editorPick = "omarchy"
+    editorPickAlso = false
+    editorPickError = badCommand ? "\u201c" + badCommand + "\u201d is not a command Omafile can find. Pick an editor instead." : ""
+    showDialog("editorpick", "Open in editor", "", { paths: paths })
+  }
+
+  function editorPickOptions() {
+    var out = [{ value: "omarchy", label: "Omarchy's default, " + Model.editorName(service ? service.omarchyEditor : "nvim"),
+      description: "Follows omarchy default editor" }]
+    var apps = service ? service.editorApps : []
+    for (var i = 0; i < apps.length; i++)
+      out.push({ value: "app:" + apps[i].id, label: apps[i].name, description: apps[i].terminal ? "Opens in your terminal" : "" })
+    out.push({ value: "own", label: "A command you type", description: "Anything on your PATH, such as code --new-window" })
+    return out
+  }
+
+  function chooseEditorPick(value) {
+    editorPick = value
+    editorPickAlso = false
+    if (value === "own") Qt.callLater(function () { editorCustomField.forceActiveFocus() })
+    else keyCatcher.forceActiveFocus()
+  }
+
+  function moveEditorPick(delta) {
+    var options = editorPickOptions()
+    var index = 0
+    for (var i = 0; i < options.length; i++) if (options[i].value === editorPick) index = i
+    chooseEditorPick(options[Math.max(0, Math.min(options.length - 1, index + delta))].value)
+  }
+
+  function finishEditorPick(job, plan) {
+    if (dialogMode === "editorpick" && dialogPayload === job) closeDialog()
+    service.launchEditor(plan, job.paths)
+    afterLaunch()
+  }
+
+  function submitEditorPick() {
+    var job = dialogPayload
+    if (!service || !job || !job.paths) return
+    if (editorPick === "omarchy") {
+      applySettingNow("editorChoice", "omarchy")
+      finishEditorPick(job, { mode: "omarchy" })
+      return
+    }
+    if (editorPick.indexOf("app:") === 0) {
+      var id = editorPick.substring(4)
+      if (editorPickAlso && editorPickCanAlso) service.setOmarchyEditor(id)
+      applySettingNow("editor", id)
+      applySettingNow("editorChoice", "own")
+      finishEditorPick(job, { mode: "own", command: id })
+      return
+    }
+    var typed = String(editorCustomField.text || "").trim()
+    if (!typed) {
+      editorPickError = "Type a command, or pick an editor."
+      return
+    }
+    service.checkProgram(typed, function (found) {
+      if (root.dialogMode !== "editorpick" || root.dialogPayload !== job) return
+      if (!found) {
+        root.editorPickError = "\u201c" + typed + "\u201d is not a command Omafile can find."
+        return
+      }
+      root.applySettingNow("editor", typed)
+      root.applySettingNow("editorChoice", "own")
+      root.finishEditorPick(job, { mode: "own", command: typed })
+    })
+  }
+
+  function editorSettingOptions() {
+    var out = [{ label: "Ask the first time", value: "" },
+      { label: "Omarchy's default, " + Model.editorName(service ? service.omarchyEditor : "nvim"), value: "omarchy" }]
+    var apps = service ? service.editorApps : []
+    for (var i = 0; i < apps.length; i++) out.push({ label: apps[i].name, value: "app:" + apps[i].id })
+    out.push({ label: "A command you type", value: "own" })
+    return out
+  }
+
+  function chooseEditorSetting(value) {
+    editorOwnTyping = value === "own"
+    if (value === "") {
+      applySettingNow("editorChoice", "")
+      applySettingNow("editor", "")
+    } else if (value === "omarchy") applySettingNow("editorChoice", "omarchy")
+    else if (value.indexOf("app:") === 0) {
+      applySettingNow("editor", value.substring(4))
+      applySettingNow("editorChoice", "own")
+    } else applySettingNow("editorChoice", "own")
+  }
+
+  function saveEditorCommand(text) {
+    applySettingNow("editor", String(text || "").trim())
+    applySettingNow("editorChoice", "own")
+  }
+
+  function agentPlaceholder() {
+    if (!service) return ""
+    var fallback = Model.agentChoice("", service.omarchyAgent, service.omarchyAgentFound, service.claudeAvailable)
+    if (fallback.source === "omarchy") return "Omarchy's default, " + fallback.name
+    if (fallback.source === "claude") return "Claude Code"
+    return "None installed. Type a command"
+  }
   function isBookmarked(path) {
     if (!service) return false
     var list = service.pinned
@@ -1525,7 +1666,7 @@ Item {
       else p.openEntry(entry)
     }
     else if (key === "openwith") showDialog("openwith", "Open " + openWithLabel(entry) + " with", "", entry)
-    else if (key === "editor") { service.openEditor(entry ? targetPaths(selectionTargets(entry)) : [p.path]); afterLaunch() }
+    else if (key === "editor") requestEditor(entry ? targetPaths(selectionTargets(entry)) : [p.path])
     else if (key === "opentab") newTab(activeSide, entry.path)
     else if (key === "copy") doCopy()
     else if (key === "cut") doCut()
@@ -2171,6 +2312,11 @@ Item {
       if (event.key === Qt.Key_Down) { moveAppCursor(1); return true }
       if (event.key === Qt.Key_Up) { moveAppCursor(-1); return true }
       if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { chooseApp(); return true }
+    }
+    if (dialogMode === "editorpick") {
+      if (event.key === Qt.Key_Down) { moveEditorPick(1); return true }
+      if (event.key === Qt.Key_Up) { moveEditorPick(-1); return true }
+      if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { submitEditorPick(); return true }
     }
     if (dialogMode === "transcode" && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
       submitDialog()
@@ -4015,11 +4161,22 @@ Item {
                     text: "Editor"
                   }
 
-                  EditField {
+                  Dropdown {
+                    objectName: "editorSetting"
                     width: parent.width
+                    showLabel: false
+                    value: root.editorSettingValue
+                    options: root.dialogMode === "settings" ? root.editorSettingOptions() : []
+                    onChanged: function (v) { root.chooseEditorSetting(v) }
+                  }
+
+                  EditField {
+                    objectName: "editorCommandField"
+                    width: parent.width
+                    visible: root.editorSettingValue === "own"
                     text: root.textSetting("editor", "")
-                    placeholderText: "Omarchy default"
-                    onAccepted: root.applySettingNow("editor", text)
+                    placeholderText: "For example code --new-window"
+                    onAccepted: root.saveEditorCommand(text)
                   }
 
                   PanelSectionHeader {
@@ -4029,15 +4186,16 @@ Item {
 
                   EditField {
                     width: parent.width
+                    objectName: "agentField"
                     text: root.textSetting("agent", "")
-                    placeholderText: "Claude Code"
+                    placeholderText: root.dialogMode === "settings" ? root.agentPlaceholder() : ""
                     onAccepted: root.applySettingNow("agent", text)
                   }
 
                   Text {
                     textFormat: Text.PlainText
                     width: parent.width
-                    text: "For example alacritty -e nvim, zeditor or omp. Press Enter to save."
+                    text: "Commands such as alacritty -e nvim or omp. Leave the agent empty to follow omarchy default agent. Press Enter to save."
                     color: Util.alpha(Color.popups.text, 0.5)
                     font.family: Style.font.family
                     font.pixelSize: Style.font.caption
@@ -4217,6 +4375,111 @@ Item {
           }
 
           Column {
+            id: editorPickColumn
+            width: parent.width
+            visible: root.dialogMode === "editorpick"
+            spacing: Style.space(6)
+
+            Text {
+              textFormat: Text.PlainText
+              objectName: "editorPickMessage"
+              width: parent.width
+              text: root.editorPickError !== "" ? root.editorPickError
+                : "Pick how Omafile opens files in an editor. It remembers your choice."
+              color: root.editorPickError !== "" ? Color.urgent : Util.alpha(Color.popups.text, 0.7)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.Wrap
+            }
+
+            Repeater {
+              model: root.dialogMode === "editorpick" ? root.editorPickOptions() : []
+
+              delegate: Rectangle {
+                required property var modelData
+                objectName: "editorPick-" + modelData.value
+                width: editorPickColumn.width
+                height: pickLabels.implicitHeight + Style.space(12)
+                radius: Style.cornerRadius
+                color: root.editorPick === modelData.value
+                  ? Util.alpha(Color.accent, 0.18)
+                  : (pickHover.hovered ? Util.alpha(Color.foreground, 0.08) : "transparent")
+
+                HoverHandler { id: pickHover }
+
+                Column {
+                  id: pickLabels
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.leftMargin: Style.space(8)
+                  anchors.rightMargin: Style.space(8)
+                  anchors.verticalCenter: parent.verticalCenter
+
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    text: modelData.label
+                    color: Color.popups.text
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.body
+                    elide: Text.ElideRight
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    visible: modelData.description !== ""
+                    text: modelData.description
+                    color: Util.alpha(Color.popups.text, 0.55)
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
+                }
+
+                MouseArea {
+                  anchors.fill: parent
+                  onClicked: root.chooseEditorPick(modelData.value)
+                  onDoubleClicked: {
+                    root.chooseEditorPick(modelData.value)
+                    if (modelData.value !== "own") root.submitEditorPick()
+                  }
+                }
+              }
+            }
+
+            EditField {
+              id: editorCustomField
+              objectName: "editorCustomField"
+              width: parent.width
+              visible: root.dialogMode === "editorpick" && root.editorPick === "own"
+              placeholderText: "For example code --new-window"
+              onAccepted: root.submitEditorPick()
+              Keys.onEscapePressed: root.closeDialog()
+            }
+
+            Toggle {
+              objectName: "editorPickAlso"
+              width: parent.width
+              visible: root.editorPickCanAlso
+              label: "Also make it Omarchy's default editor"
+              description: "Changes it for all of Omarchy, not just Omafile"
+              checked: root.editorPickAlso
+              onClicked: root.editorPickAlso = !root.editorPickAlso
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              text: "Change it later in Settings, under Commands."
+              color: Util.alpha(Color.popups.text, 0.5)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.Wrap
+            }
+          }
+
+          Column {
             width: parent.width
             visible: root.dialogMode === "unlock"
             spacing: Style.space(8)
@@ -4343,16 +4606,17 @@ Item {
               opacity: enabled ? 1 : 0.4
               text: root.isReadOnlyDialog() ? "Close"
                 : (root.dialogMode === "connect" ? "Connect"
-                  : (root.dialogMode === "unlock" ? "Unlock"
+                  : (root.dialogMode === "unlock" ? "Unlock" : (root.dialogMode === "editorpick" ? "Open"
                     : (root.dialogMode === "openwith" ? "Open"
                       : (root.dialogMode === "compress" ? "Compress"
-                        : (root.dialogMode === "transcode" ? "Transcode" : "Confirm")))))
+                        : (root.dialogMode === "transcode" ? "Transcode" : "Confirm"))))))
               bordered: true
               onClicked: {
                 if (root.isReadOnlyDialog()) root.closeDialog()
                 else if (root.dialogMode === "openwith") root.chooseApp()
                 else if (root.dialogMode === "connect") root.submitConnect()
                 else if (root.dialogMode === "unlock") root.submitUnlock()
+                else if (root.dialogMode === "editorpick") root.submitEditorPick()
                 else root.submitDialog()
               }
             }

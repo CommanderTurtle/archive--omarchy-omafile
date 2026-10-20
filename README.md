@@ -149,11 +149,17 @@ This uses GVFS and needs no root. Install `gvfs-smb` for Windows shares if it is
 
 ### Terminal, editor and agent
 
-Right click a folder, or empty space for the folder you are in, and choose Open in terminal, or press Ctrl+.. With [Claude Code](https://claude.com/claude-code) installed, Open Claude Code here starts it in that folder and leaves a shell open when it exits.
+Right click a folder, or empty space for the folder you are in, and choose Open in terminal, or press Ctrl+.. The agent item starts a coding agent in that folder and leaves a shell open when it exits. It runs the agent you picked with `omarchy default agent`, such as Open Oh My Pi here, or Claude Code when you have not picked one and it is installed. Omafile starts the agent plainly, without the auto-approve flags `omarchy agent` adds, because the folder may be one you just downloaded. Set your own agent under Settings, Commands, Agent, such as `omp` or `codex --full-auto`. The item is then named after it, Open omp here.
 
-Set another agent under Settings, Commands, Agent, such as `omp` or `codex --full-auto`. The item is then named after it, Open omp here, and shows whether or not Claude Code is installed.
+Open in editor, right under Open with, opens the selected files or folders in an editor. The first time, it asks which one:
 
-Open in editor, right under Open with, opens a file or folder in the Editor command from Settings, Commands, or in your Omarchy default editor when that is empty. Set it to `zeditor` or `code` to open folders as projects.
+| Choice | What it does |
+|--------|--------------|
+| Omarchy's default | Follows `omarchy default editor`, so changing it there changes it here |
+| An editor you have | VS Code, Zed, Neovim, nano and the others Omafile finds installed. Terminal editors open in your terminal. For an editor Omarchy knows, **Also make it Omarchy's default editor** sets it for all of Omarchy too |
+| A command you type | Anything on your `PATH`, such as `code --new-window` or `alacritty -e nvim` |
+
+Omafile remembers the choice. Change it under Settings, Commands, Editor, or pick Ask the first time to be asked again. If a saved command no longer exists, Open in editor asks again instead of failing.
 
 ### Settings
 
@@ -356,8 +362,9 @@ Configure these keys through the Omarchy bar widget settings:
 | `rememberFolderViews` | Open each folder in the view last picked there, and other folders in `defaultView` |
 | `extractOnOpen` | Double click and Enter extract archives instead of opening them. Off by default |
 | `terminal` | Terminal command to open in the current directory |
-| `editor` | Editor command for Open in editor. Empty for your Omarchy default editor |
-| `agent` | Command Open ... here runs in a terminal. Empty for Claude Code |
+| `editorChoice` | Open in editor: empty to ask the first time, `omarchy` for Omarchy's default, `own` for `editor` |
+| `editor` | Editor command, used when `editorChoice` is `own` |
+| `agent` | Command Open ... here runs in a terminal. Empty for your Omarchy default agent, then Claude Code |
 | `showTransferBadge` | Show a progress ring on the bar icon while a transfer runs |
 | `showDrives` | Show the Drives section in the sidebar |
 | `thumbnails` | Show image previews and thumbnails |

@@ -1324,17 +1324,83 @@ Item {
   }
 
   function openAgent(path) {
+    if (!agentCommand) return
     Quickshell.execDetached(["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--dir=" + path,
-      "bash", "-c", (agentCommand || "claude") + "; exec bash"])
+      "bash", "-c", agentCommand + "; exec bash"])
   }
 
-  function openEditor(paths) {
+  property string omarchyEditor: "nvim"
+  property string omarchyAgent: ""
+  property bool omarchyAgentFound: false
+  property var programsFound: ({})
+  readonly property var editorApps: Model.knownEditors.filter(function (e) { return root.programsFound[e.id] === true })
+  readonly property string editorChoice: String(settingNow("editorChoice", "") || "")
+  readonly property string editorCommand: String(settingNow("editor", "") || "").trim()
+
+  function refreshDefaults() {
+    return request({ op: "defaults", names: Model.knownEditors.map(function (e) { return e.id }) }, {
+      onData: function (m) {
+        if (m.t !== "defaults") return
+        root.omarchyEditor = String(m.editor || "nvim")
+        root.omarchyAgent = String(m.agent || "")
+        root.omarchyAgentFound = m.agentFound === true
+        root.programsFound = m.found || ({})
+      }
+    })
+  }
+
+  function checkProgram(command, onResult) {
+    var program = Model.commandProgram(command)
+    if (!program) {
+      Qt.callLater(function () { onResult(false) })
+      return 0
+    }
+    var found = false
+    return request({ op: "defaults", names: [program] }, {
+      onData: function (m) { if (m.t === "defaults" && m.found) found = m.found[program] === true },
+      onDone: function () { onResult(found) },
+      onError: function () { onResult(false) }
+    })
+  }
+
+  function editorPlan(onPlan) {
+    if (editorChoice === "omarchy") {
+      Qt.callLater(function () { onPlan({ mode: "omarchy" }) })
+      return
+    }
+    var command = editorCommand
+    if (!command) {
+      Qt.callLater(function () { onPlan({ ask: true, error: "" }) })
+      return
+    }
+    checkProgram(command, function (found) {
+      onPlan(found ? { mode: "own", command: command } : { ask: true, error: command })
+    })
+  }
+
+  function launchEditor(plan, paths) {
     var list = []
     for (var i = 0; i < paths.length; i++) list.push(String(paths[i]))
-    if (list.length === 0) return
-    var configured = String(settingNow("editor", "") || "").trim()
-    if (configured) Quickshell.execDetached(["sh", "-c", configured + " \"$@\"", "omafile"].concat(list))
-    else Quickshell.execDetached(["omarchy-launch-editor"].concat(list))
+    if (list.length === 0 || !plan) return
+    if (plan.mode === "omarchy") {
+      Quickshell.execDetached(["omarchy-launch-editor"].concat(list))
+      return
+    }
+    var command = String(plan.command || "").trim()
+    if (!command) return
+    var script = ["sh", "-c", command + " \"$@\"", "omafile"].concat(list)
+    if (Model.editorInTerminal(command))
+      Quickshell.execDetached(["omarchy-launch-tui", "--app-id=org.omarchy." + Model.commandName(command)].concat(script))
+    else
+      Quickshell.execDetached(["setsid", "uwsm-app", "--"].concat(script))
+  }
+
+  function setOmarchyEditor(id) {
+    var known = Model.knownEditor(String(id || ""))
+    if (!known || !known.omarchy) return false
+    Quickshell.execDetached(["omarchy-default-editor", known.id])
+    omarchyEditor = known.id
+    return true
   }
 
   function copyToClipboardText(text) {
@@ -1766,6 +1832,7 @@ Item {
         helperStable.restart()
         Qt.callLater(root.drainQueue)
         Qt.callLater(root.refreshBookmarks)
+        Qt.callLater(root.refreshDefaults)
         if (root.helperRestarts > 0) Qt.callLater(root.refreshTrash)
       } else {
         root.helperReady = false
@@ -1789,9 +1856,10 @@ Item {
   }
 
   property bool claudeAvailable: false
-  readonly property string agentCommand: String(settingNow("agent", "") || "").trim()
-  readonly property string agentName: agentCommand ? (Model.commandName(agentCommand) || agentCommand) : "Claude Code"
-  readonly property bool agentAvailable: agentCommand !== "" || claudeAvailable
+  readonly property var agent: Model.agentChoice(settingNow("agent", ""), omarchyAgent, omarchyAgentFound, claudeAvailable)
+  readonly property string agentCommand: agent.command
+  readonly property string agentName: agent.name
+  readonly property bool agentAvailable: agentCommand !== ""
 
   property Process claudeCheck: Process {
     command: ["sh", "-c", "command -v claude"]

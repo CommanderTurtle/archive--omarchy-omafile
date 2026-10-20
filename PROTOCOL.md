@@ -394,6 +394,20 @@ recent copies are kept. Errors: `EINVAL` for anything that is not a regular file
 Replies `{"t": "thumbtypes", "exts": ["avi", "mkv", "mp4", "pdf", ...]}` then `done`:
 the lowercase file extensions some installed thumbnailer can handle.
 
+### defaults
+
+```
+{"id": N, "op": "defaults", "names": ["code", "nvim", "~/.local/bin/omp"]}
+```
+
+Replies `{"t": "defaults", "editor": E, "agent": A, "agentFound": B, "found": {name: B}}` then `done`.
+`editor` is Omarchy's default editor from `~/.local/state/omarchy/defaults/editor`, or `nvim`
+like `omarchy default editor`. `agent` is Omarchy's default agent from
+`~/.config/omarchy/defaults/agent`, or empty. Either is used only when its first line is a plain
+program name. `found` says, for each of up to 64 `names`, whether that program exists: a plain
+name is looked up on the helper's `PATH`, an absolute or `~/` path must be an executable regular
+file, and anything else is not found. Nothing is run. Errors: `EINVAL` for a bad `names`.
+
 ### bookmarks, setbookmarks
 
 ```

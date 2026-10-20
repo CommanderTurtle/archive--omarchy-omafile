@@ -1398,6 +1398,7 @@ ShellRoot {
 
       function test_9ba_menuActsOnTheWholeSelection() {
         waitRows()
+        mock.updateSetting("editorChoice", "omarchy")
         pane().setSortOrder("name", false)
         var alpha = names().indexOf("alpha.yml")
         var beta = names().indexOf("beta.png")
@@ -1414,7 +1415,7 @@ ShellRoot {
         mock.calls = []
         browser.menuEntry = clicked
         browser.runAction("editor")
-        compare(mock.called("openEditor").args[0].length, 2, "Open in editor gets every selected file")
+        compare(mock.called("launchEditor").args[1].length, 2, "Open in editor gets every selected file")
         browser.menuEntry = clicked
         browser.runAction("openwith")
         compare(browser.dialogTitle, "Open 2 items with")
@@ -1426,7 +1427,7 @@ ShellRoot {
         var outside = Model.decodeEntry(["gamma.txt", "f", 1, 100, 420, null], "/tmp")
         browser.menuEntry = outside
         browser.runAction("editor")
-        compare(mock.called("openEditor").args[0], ["/tmp/gamma.txt"], "an item outside the selection acts alone")
+        compare(mock.called("launchEditor").args[1], ["/tmp/gamma.txt"], "an item outside the selection acts alone")
         pane().clearSelection()
       }
 
@@ -1466,6 +1467,7 @@ ShellRoot {
 
       function test_9ca_editorAndAgentItems() {
         waitRows()
+        mock.updateSetting("editorChoice", "omarchy")
         var file = { name: "notes.txt", path: "/tmp/notes.txt", isDir: false, ext: "txt" }
         var folder = { name: "docs", path: "/tmp/docs", isDir: true, ext: "" }
         var fileLabels = menuLabels(browser.contextActions(file))
@@ -1475,7 +1477,7 @@ ShellRoot {
         mock.calls = []
         browser.menuEntry = file
         browser.runAction("editor")
-        compare(mock.called("openEditor").args[0], ["/tmp/notes.txt"])
+        compare(mock.called("launchEditor").args[1], ["/tmp/notes.txt"])
 
         verify(menuLabels(browser.contextActions(folder)).indexOf("Open Claude Code here") < 0, "no agent item without an agent")
         mock.agentAvailable = true
@@ -1490,6 +1492,104 @@ ShellRoot {
         compare(mock.called("openAgent").args[0], "/tmp/docs")
         mock.agentAvailable = false
         mock.agentName = "Claude Code"
+      }
+
+      function test_9cb_editorIsAskedForOnce() {
+        waitRows()
+        mock.updateSetting("editorChoice", "")
+        mock.updateSetting("editor", "")
+        var file = { name: "notes.txt", path: "/tmp/notes.txt", isDir: false, ext: "txt" }
+        function values() { return browser.editorPickOptions().map(function (o) { return o.value }) }
+
+        mock.calls = []
+        browser.menuEntry = file
+        browser.runAction("editor")
+        tryCompare(browser, "dialogMode", "editorpick")
+        compare(mock.called("launchEditor"), null, "nothing opens before you choose")
+        verify(mock.called("refreshDefaults") !== null)
+        compare(values(), ["omarchy", "app:code", "app:nvim", "app:nano", "own"], "Omarchy's default, the editors you have, or a command")
+        compare(browser.editorPickOptions()[0].label, "Omarchy's default, Neovim")
+        keyClick(Qt.Key_Escape)
+        compare(browser.dialogMode, "")
+        compare(mock.called("launchEditor"), null, "cancelling opens nothing")
+        compare(mock.editorChoice, "", "and saves nothing")
+
+        browser.menuEntry = file
+        browser.runAction("editor")
+        tryCompare(browser, "dialogMode", "editorpick")
+        keyClick(Qt.Key_Return)
+        compare(mock.editorChoice, "omarchy", "Omarchy's default is the first choice")
+        compare(mock.called("launchEditor").args[0].mode, "omarchy")
+        compare(mock.called("launchEditor").args[1], ["/tmp/notes.txt"])
+        mock.calls = []
+        browser.runAction("editor")
+        compare(browser.dialogMode, "", "it asks only once")
+        compare(mock.called("launchEditor").args[0].mode, "omarchy")
+
+        mock.updateSetting("editorChoice", "")
+        browser.menuEntry = file
+        browser.runAction("editor")
+        tryCompare(browser, "dialogMode", "editorpick")
+        keyClick(Qt.Key_Down)
+        compare(browser.editorPick, "app:code")
+        verify(browser.editorPickCanAlso, "VS Code can also become Omarchy's default")
+        var also = findChild(browser, "editorPickAlso")
+        verify(also.visible)
+        waitForRendering(browser)
+        mouseClick(also)
+        verify(browser.editorPickAlso)
+        mock.calls = []
+        keyClick(Qt.Key_Return)
+        compare(mock.called("setOmarchyEditor").args[0], "code")
+        compare(mock.editorCommand, "code")
+        compare(mock.editorChoice, "own")
+        compare(mock.called("launchEditor").args[0].command, "code")
+
+        mock.updateSetting("editor", "-e nano")
+        mock.missingPrograms = { "-e": true }
+        mock.calls = []
+        browser.menuEntry = file
+        browser.runAction("editor")
+        tryCompare(browser, "dialogMode", "editorpick")
+        compare(mock.called("launchEditor"), null, "a command that does not exist is never run")
+        verify(browser.editorPickError.indexOf("\u201c-e nano\u201d is not a command") === 0, browser.editorPickError)
+        browser.chooseEditorPick("app:nano")
+        verify(!browser.editorPickCanAlso, "nano cannot be Omarchy's default")
+        browser.chooseEditorPick("own")
+        var typed = findChild(browser, "editorCustomField")
+        tryCompare(typed, "activeFocus", true)
+        mock.missingPrograms = { "zz-missing": true }
+        typed.text = "zz-missing --flag"
+        keyClick(Qt.Key_Return)
+        tryVerify(function () { return browser.editorPickError.indexOf("zz-missing") > 0 })
+        compare(browser.dialogMode, "editorpick", "a typed command that does not exist keeps the dialog open")
+        typed.text = "nano -w"
+        keyClick(Qt.Key_Return)
+        tryCompare(browser, "dialogMode", "")
+        compare(mock.editorCommand, "nano -w")
+        compare(mock.called("launchEditor").args[0].command, "nano -w")
+        mock.missingPrograms = ({})
+
+        compare(browser.editorSettingValue, "own")
+        browser.chooseEditorSetting("app:nano")
+        compare(browser.editorSettingValue, "app:nano")
+        browser.chooseEditorSetting("omarchy")
+        compare(browser.editorSettingValue, "omarchy")
+        browser.chooseEditorSetting("own")
+        compare(browser.editorSettingValue, "own")
+        browser.chooseEditorSetting("")
+        compare(browser.editorSettingValue, "")
+        compare(mock.editorCommand, "", "asking again clears the old command")
+
+        mock.omarchyAgent = "omp"
+        mock.omarchyAgentFound = true
+        compare(browser.agentPlaceholder(), "Omarchy's default, Oh My Pi")
+        mock.omarchyAgentFound = false
+        mock.claudeAvailable = true
+        compare(browser.agentPlaceholder(), "Claude Code")
+        mock.omarchyAgent = ""
+        mock.claudeAvailable = false
+        mock.updateSetting("editorChoice", "omarchy")
       }
 
       function test_9d_pasteFromSystemClipboard() {

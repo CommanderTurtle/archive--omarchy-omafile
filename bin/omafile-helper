@@ -4590,6 +4590,56 @@ def op_transcode(req, cancel_event):
     send_done(req_id, outputs=outputs, failures=failures)
 
 
+OMARCHY_EDITOR_FILE = os.path.join(HOME, ".local", "state", "omarchy", "defaults", "editor")
+OMARCHY_AGENT_FILE = os.path.join(HOME, ".config", "omarchy", "defaults", "agent")
+OMARCHY_DEFAULT_EDITOR = "nvim"
+DEFAULT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
+PROGRAM_CHECK_LIMIT = 64
+
+
+def read_omarchy_default(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return ""
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ""
+        data = os.read(fd, 4096)
+    except OSError:
+        return ""
+    finally:
+        os.close(fd)
+    lines = data.decode("utf-8", "replace").splitlines()
+    value = lines[0].strip() if lines else ""
+    return value if DEFAULT_NAME_RE.match(value) else ""
+
+
+def program_found(name, search_path):
+    if not isinstance(name, str) or not name or len(name) > 4096 or "\0" in name:
+        return False
+    if name.startswith("~/"):
+        name = os.path.join(HOME, name[2:])
+    if "/" in name:
+        return os.path.isabs(name) and os.path.isfile(name) and os.access(name, os.X_OK)
+    return shutil.which(name, path=search_path) is not None
+
+
+def op_defaults(req):
+    req_id = req["id"]
+    names = req.get("names") or []
+    if not isinstance(names, list) or len(names) > PROGRAM_CHECK_LIMIT or not all(isinstance(n, str) for n in names):
+        send_error(req_id, "EINVAL", "names must be a list of at most %d strings" % PROGRAM_CHECK_LIMIT)
+        return
+    search_path = os.environ.get("PATH") or "/usr/bin:/bin"
+    agent = read_omarchy_default(OMARCHY_AGENT_FILE)
+    emit({"id": req_id, "t": "defaults",
+          "editor": read_omarchy_default(OMARCHY_EDITOR_FILE) or OMARCHY_DEFAULT_EDITOR,
+          "agent": agent, "agentFound": bool(agent) and program_found(agent, search_path),
+          "found": {name: program_found(name, search_path) for name in names}})
+    send_done(req_id)
+
+
 CANCELLABLE_OPS = {
     "list": op_list,
     "search": op_search,
@@ -4621,6 +4671,7 @@ SIMPLE_OPS = {
     "stat": op_stat,
     "peek": op_peek,
     "thumbtypes": op_thumbtypes,
+    "defaults": op_defaults,
     "bookmarks": op_bookmarks,
     "setbookmarks": op_setbookmarks,
     "trash": op_trash,

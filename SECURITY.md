@@ -55,11 +55,14 @@ Only the latest release on `main` receives fixes.
 | `udisksctl` | Only when you mount, unlock, unmount or eject a drive |
 | `bsdtar` | Only when you extract or compress. Extracting reads the archive from an open file handle, refuses absolute paths and `..` entries, and goes into a private temporary folder handed over as an open folder handle, which is moved into place only when it succeeds. Compressing works inside the folder through an open handle, reads item names from standard input, writes to a new file on standard output, never follows symlinks, and never replaces an existing file |
 | `wl-copy`, `wl-paste` | Copy path, copy/cut files, paste files or images, and clipboard checks while cut markers are active |
-| `xdg-terminal-exec`, `omarchy-launch-editor` | Only when you choose Open in terminal, Open in editor, or the agent item such as Open Claude Code here |
+| `xdg-terminal-exec`, `omarchy-launch-editor`, `omarchy-launch-tui` | Only when you choose Open in terminal, Open in editor, or the agent item such as Open Claude Code here |
+| `omarchy-default-editor` | Only when you turn on Also make it Omarchy's default editor while picking an editor. It is given one name from a fixed list of editors Omarchy supports |
 
 Helper tools use argument lists. Thumbnailer arguments come from trusted system `.thumbnailer` `Exec` definitions, parsed without a shell; file paths and URIs remain individual argument values. Executables resolve through `trusted_program` and launch with `trusted_env`, ignoring user `PATH` entries and injected environment variables. Thumbnailer definitions and their parent directories must be root owned, not symlinks, and not writable by group or others. Thumbnailers run unsandboxed with your permissions, so enable previews only for files you trust the installed decoders to handle.
 
-A configured terminal, editor or agent command is deliberately interpreted by a shell. The path is passed separately as an argument.
+A configured terminal, editor or agent command is deliberately interpreted by a shell. The path is passed separately as an argument. Before a saved editor command runs, the helper checks that its program exists, so a broken setting asks for an editor instead.
+
+Omafile reads Omarchy's default editor from `~/.local/state/omarchy/defaults/editor` and default agent from `~/.config/omarchy/defaults/agent`. Only the first line is used, only when it is a plain program name of letters, digits, `.`, `_`, `+` and `-`, so the agent file cannot smuggle a shell command into the agent item. Omafile never writes either file itself.
 
 ## Owning org.freedesktop.FileManager1
 

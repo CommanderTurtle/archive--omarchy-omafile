@@ -39,6 +39,7 @@
       "viewScale": 1,
       "terminal": "",
       "editor": "",
+      "editorChoice": "",
       "agent": "",
       "showTransferBadge": true,
       "glyph": "",
@@ -139,13 +140,19 @@
       {
         "key": "editor",
         "type": "string",
-        "label": "Editor command (empty for Omarchy default)",
+        "label": "Editor command, used when the editor choice is own",
+        "defaultValue": ""
+      },
+      {
+        "key": "editorChoice",
+        "type": "string",
+        "label": "Editor: empty to ask the first time, omarchy or own",
         "defaultValue": ""
       },
       {
         "key": "agent",
         "type": "string",
-        "label": "Agent command run in a terminal (empty for Claude Code)",
+        "label": "Agent command run in a terminal (empty for the Omarchy default agent, then Claude Code)",
         "defaultValue": ""
       },
       {

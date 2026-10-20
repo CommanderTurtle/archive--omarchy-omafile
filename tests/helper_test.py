@@ -1839,6 +1839,51 @@ class PreviewSizeTests(unittest.TestCase):
                 self.assertIsNone(helper.png_scan(f, 1 << 20), "not a PNG")
 
 
+class OmarchyDefaultsTests(HelperTestCase):
+    def test_a_default_is_one_plain_program_name_or_nothing(self):
+        helper = load_helper_module()
+        path = self.path("editor")
+        for content, expected in [("zeditor\n", "zeditor"), ("  nvim  \nextra\n", "nvim"), ("cursor-agent", "cursor-agent"),
+                                  ("rm -rf ~; nvim\n", ""), ("$(id)\n", ""), ("-e\n", ""), ("", ""), ("a" * 80, "")]:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            self.assertEqual(helper.read_omarchy_default(path), expected, content)
+        self.assertEqual(helper.read_omarchy_default(self.path("missing")), "")
+        os.mkfifo(self.path("pipe"))
+        self.assertEqual(helper.read_omarchy_default(self.path("pipe")), "", "a pipe is never read")
+
+    def test_programs_are_found_on_path_by_name_or_by_absolute_path(self):
+        helper = load_helper_module()
+        bin_dir = self.path("bin")
+        os.mkdir(bin_dir)
+        tool = os.path.join(bin_dir, "myeditor")
+        with open(tool, "w", encoding="utf-8") as f:
+            f.write("#!/bin/sh\n")
+        os.chmod(tool, 0o755)
+        plain = os.path.join(bin_dir, "notrunnable")
+        with open(plain, "w", encoding="utf-8") as f:
+            f.write("x")
+        self.assertTrue(helper.program_found("myeditor", bin_dir))
+        self.assertFalse(helper.program_found("notrunnable", bin_dir))
+        self.assertFalse(helper.program_found("-e", bin_dir))
+        self.assertTrue(helper.program_found(tool, "/nowhere"))
+        self.assertFalse(helper.program_found("bin/myeditor", bin_dir), "a relative path is never guessed at")
+        self.assertFalse(helper.program_found("", bin_dir))
+        self.assertFalse(helper.program_found(None, bin_dir))
+
+    def test_defaults_reports_omarchy_choices_and_found_programs(self):
+        msgs = self.helper.call({"id": self.next_id(), "op": "defaults", "names": ["sh", "zz-no-such-editor", "/bin/sh"]})
+        reply = [m for m in msgs if m["t"] == "defaults"][0]
+        self.assertEqual(self.terminal(msgs)["t"], "done")
+        self.assertTrue(reply["editor"])
+        self.assertEqual(reply["found"], {"sh": True, "zz-no-such-editor": False, "/bin/sh": True})
+        self.assertIsInstance(reply["agentFound"], bool)
+        err = self.terminal(self.helper.call({"id": self.next_id(), "op": "defaults", "names": ["x"] * 65}))
+        self.assertEqual(err["code"], "EINVAL")
+        err = self.terminal(self.helper.call({"id": self.next_id(), "op": "defaults", "names": "sh"}))
+        self.assertEqual(err["code"], "EINVAL")
+
+
 class MountableDeviceTests(unittest.TestCase):
     def load_helper(self):
         import importlib.util

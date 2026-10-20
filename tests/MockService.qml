@@ -165,7 +165,30 @@ QtObject {
   }
   property bool agentAvailable: false
   property string agentName: "Claude Code"
-  function openEditor(path) { record("openEditor", [path]) }
+  property string omarchyEditor: "nvim"
+  property string omarchyAgent: ""
+  property bool omarchyAgentFound: false
+  property bool claudeAvailable: false
+  property var programsFound: ({ code: true, nvim: true, nano: true })
+  readonly property var editorApps: Model.knownEditors.filter(function (e) { return mock.programsFound[e.id] === true })
+  readonly property string editorChoice: String(settingNow("editorChoice", "") || "")
+  readonly property string editorCommand: String(settingNow("editor", "") || "").trim()
+  property var missingPrograms: ({})
+  function refreshDefaults() { record("refreshDefaults", []); return 0 }
+  function checkProgram(command, onResult) {
+    var program = Model.commandProgram(command)
+    record("checkProgram", [program])
+    Qt.callLater(function () { onResult(program !== "" && mock.missingPrograms[program] !== true) })
+    return 0
+  }
+  function editorPlan(onPlan) {
+    if (editorChoice === "omarchy") { onPlan({ mode: "omarchy" }); return }
+    var command = editorCommand
+    if (!command) { onPlan({ ask: true, error: "" }); return }
+    checkProgram(command, function (found) { onPlan(found ? { mode: "own", command: command } : { ask: true, error: command }) })
+  }
+  function launchEditor(plan, paths) { record("launchEditor", [plan, paths]) }
+  function setOmarchyEditor(id) { record("setOmarchyEditor", [id]); omarchyEditor = id; return true }
   function openAgent(path) { record("openAgent", [path]) }
   property var compressResult: null
   function makeDirectory(path, onDone, onError) { record("makeDirectory", [path]); if (onDone) onDone({}) }

@@ -788,6 +788,35 @@ test('expandFieldCodes quotes the path inside a shell script argument', function
   assert.deepEqual(expand(['app', '-c', 'x %f'], '/tmp/a b'), ['app', '-c', 'x /tmp/a b']);
 });
 
+test('commandProgram gives the program a command starts, so it can be looked up', function () {
+  assert.equal(Model.commandProgram('code --new-window'), 'code');
+  assert.equal(Model.commandProgram('~/bin/omp --resume'), '~/bin/omp');
+  assert.equal(Model.commandProgram('FOO=1 nvim'), 'nvim');
+  assert.equal(Model.commandProgram('-e nano'), '-e', 'a broken setting names no real program');
+  assert.equal(Model.commandProgram(''), '');
+});
+
+test('editorInTerminal spots editors that need a terminal, by the program they run', function () {
+  assert.equal(Model.editorInTerminal('nano'), true);
+  assert.equal(Model.editorInTerminal('/usr/bin/nvim -p'), true);
+  assert.equal(Model.editorInTerminal('code'), false);
+  assert.equal(Model.editorInTerminal('alacritty -e nvim'), false, 'a command that opens its own terminal runs as is');
+  assert.equal(Model.editorName('zeditor'), 'Zed');
+  assert.equal(Model.editorName('kate'), 'kate');
+  assert.equal(Model.knownEditor('nano').omarchy, false, 'Omarchy cannot make nano its default');
+});
+
+function plain(value) { return JSON.parse(JSON.stringify(value)); }
+
+test('agentChoice uses your own agent, then Omarchy\'s default, then Claude Code', function () {
+  assert.deepEqual(plain(Model.agentChoice('omp --resume', 'claude', true, true)), { command: 'omp --resume', name: 'omp', source: 'own' });
+  assert.deepEqual(plain(Model.agentChoice('', 'omp', true, true)), { command: 'omp', name: 'Oh My Pi', source: 'omarchy' });
+  assert.deepEqual(plain(Model.agentChoice('', 'omp', false, true)), { command: 'claude', name: 'Claude Code', source: 'claude' },
+    'an Omarchy default that is not installed is skipped');
+  assert.deepEqual(plain(Model.agentChoice('  ', '', false, false)), { command: '', name: '', source: '' });
+  assert.equal(Model.agentChoice('', 'newagent', true, false).name, 'newagent');
+});
+
 test('previewSide matches the screen when automatic and stops at 4096', function () {
   assert.equal(Model.previewSide('auto', 900), 1024, 'a 1080p screen keeps the standard preview');
   assert.equal(Model.previewSide('auto', 1024), 1024);

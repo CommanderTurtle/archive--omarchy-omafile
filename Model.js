@@ -855,13 +855,60 @@ function tokenizeCommand(text) {
 
 var envAssignment = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
-function commandName(text) {
+function commandProgram(text) {
   var words = tokenizeCommand(text);
   for (var i = 0; i < words.length; i++) {
     if (envAssignment.test(words[i])) continue;
-    return basename(words[i]);
+    return words[i];
   }
   return '';
+}
+
+function commandName(text) {
+  return basename(commandProgram(text));
+}
+
+var knownEditors = [
+  { id: 'code', name: 'VS Code', omarchy: true, terminal: false },
+  { id: 'cursor', name: 'Cursor', omarchy: true, terminal: false },
+  { id: 'zeditor', name: 'Zed', omarchy: true, terminal: false },
+  { id: 'sublime_text', name: 'Sublime Text', omarchy: true, terminal: false },
+  { id: 'emacs', name: 'Emacs', omarchy: true, terminal: false },
+  { id: 'nvim', name: 'Neovim', omarchy: true, terminal: true },
+  { id: 'vim', name: 'Vim', omarchy: true, terminal: true },
+  { id: 'helix', name: 'Helix', omarchy: true, terminal: true },
+  { id: 'nano', name: 'nano', omarchy: false, terminal: true },
+  { id: 'micro', name: 'micro', omarchy: false, terminal: true }
+];
+var terminalEditors = toSet(['nvim', 'vim', 'vi', 'nano', 'micro', 'hx', 'helix', 'fresh', 'kak', 'emacsclient-nw']);
+
+function knownEditor(id) {
+  for (var i = 0; i < knownEditors.length; i++) if (knownEditors[i].id === id) return knownEditors[i];
+  return null;
+}
+
+function editorName(id) {
+  var known = knownEditor(String(id || ''));
+  return known ? known.name : String(id || '');
+}
+
+function editorInTerminal(command) {
+  return terminalEditors[commandName(command)] === true;
+}
+
+var omarchyAgentNames = {
+  pi: 'Pi', omp: 'Oh My Pi', opencode: 'OpenCode', claude: 'Claude Code', codex: 'Codex', crush: 'Crush',
+  grok: 'Grok', gemini: 'Gemini', openclaw: 'OpenClaw', hermes: 'Hermes', copilot: 'GitHub Copilot',
+  'cursor-agent': 'Cursor CLI', muse: 'Muse Code'
+};
+
+function agentChoice(setting, omarchyAgent, omarchyFound, claudeFound) {
+  var own = String(setting || '').trim();
+  if (own) return { command: own, name: commandName(own) || own, source: 'own' };
+  var picked = String(omarchyAgent || '');
+  if (picked && omarchyFound) return { command: picked, name: omarchyAgentNames[picked] || picked, source: 'omarchy' };
+  if (claudeFound) return { command: 'claude', name: 'Claude Code', source: 'claude' };
+  return { command: '', name: '', source: '' };
 }
 
 var globLimit = 64;

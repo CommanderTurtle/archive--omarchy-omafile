@@ -1126,12 +1126,13 @@ Item {
     picture: {
       formats: [{ label: "JPG, smaller", value: "jpg" }, { label: "PNG, lossless", value: "png" }],
       sizes: [{ label: "High, up to 3160 px wide", value: "high" }, { label: "Medium, up to 2160 px wide", value: "medium" },
-        { label: "Low, up to 1080 px wide", value: "low" }],
+        { label: "Low, up to 1080 px wide", value: "low" }, { label: "Original size", value: "original" }],
       format: "jpg", size: "medium"
     },
     video: {
       formats: [{ label: "MP4, plays anywhere", value: "mp4" }, { label: "GIF, for chat and docs", value: "gif" }],
-      sizes: [{ label: "4K", value: "4k" }, { label: "1080p", value: "1080p" }, { label: "720p", value: "720p" }],
+      sizes: [{ label: "4K", value: "4k" }, { label: "1080p", value: "1080p" }, { label: "720p", value: "720p" },
+        { label: "Original size", value: "original" }],
       format: "mp4", size: "1080p"
     }
   })
@@ -1633,9 +1634,16 @@ Item {
     previewPanY = 0
   }
 
+  readonly property int previewSide: Model.previewSide(textSetting("previewSize", "auto"),
+    Math.max(previewBody.width, previewBody.height) * Screen.devicePixelRatio)
+  readonly property bool previewImageReady: previewImage.status === Image.Ready
+    || (previewBase.active && previewBase.status === Image.Ready)
+  readonly property bool previewImageFailed: previewImage.failed && (!previewBase.active || previewBase.failed)
+
   function previewPaintedSize(zoom) {
-    var w = previewImage.implicitWidth
-    var h = previewImage.implicitHeight
+    var shown = previewImage.status === Image.Ready ? previewImage : previewBase
+    var w = shown.implicitWidth
+    var h = shown.implicitHeight
     if (w <= 0 || h <= 0 || previewBody.width <= 0 || previewBody.height <= 0) return { w: 0, h: 0 }
     var fit = Math.min(previewBody.width / w, previewBody.height / h)
     return { w: w * fit * zoom, h: h * fit * zoom }
@@ -3203,6 +3211,23 @@ Item {
           clip: true
 
           ThumbImage {
+            id: previewBase
+            objectName: "previewBase"
+            width: previewBody.width * root.previewZoom
+            height: previewBody.height * root.previewZoom
+            x: (previewBody.width - width) / 2 + root.previewPanX
+            y: (previewBody.height - height) / 2 + root.previewPanY
+            service: root.service
+            active: root.previewOpen && root.previewKind === "image" && root.previewSide > 1024
+            entry: active ? root.previewEntry : null
+            generated: active && root.previewThumbable()
+            requestSize: 1024
+            sourceSize.width: requestSize
+            sourceSize.height: requestSize
+            visible: String(source) !== "" && status === Image.Ready && previewImage.status !== Image.Ready
+          }
+
+          ThumbImage {
             id: previewImage
             objectName: "previewImage"
             width: previewBody.width * root.previewZoom
@@ -3213,16 +3238,17 @@ Item {
             active: root.previewOpen && root.previewKind === "image"
             entry: active ? root.previewEntry : null
             generated: active && root.previewThumbable()
-            requestSize: root.boolSetting("largePreviews", false) ? 2048 : 1024
+            requestSize: root.previewSide
             sourceSize.width: requestSize
             sourceSize.height: requestSize
+            cache: requestSize <= 1024
           }
 
           MouseArea {
             id: previewZoomArea
             objectName: "previewZoomArea"
             anchors.fill: parent
-            enabled: root.previewOpen && root.previewKind === "image" && previewImage.visible
+            enabled: root.previewOpen && root.previewKind === "image" && root.previewImageReady
             acceptedButtons: Qt.LeftButton
             cursorShape: root.previewZoom > 1 ? (pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor) : Qt.ArrowCursor
             property real startX: 0
@@ -3306,7 +3332,7 @@ Item {
             spacing: Style.space(10)
             visible: root.previewKind === "folder" || root.previewKind === "none" || root.previewKind === "remoteaudio"
               || (root.previewKind === "text" && (root.previewBinary || root.previewLoading))
-              || (root.previewKind === "image" && previewImage.status !== Image.Ready)
+              || (root.previewKind === "image" && !root.previewImageReady)
               || (root.previewKind === "audio" && audioPreview.status === Loader.Error)
 
             Text {
@@ -3322,7 +3348,7 @@ Item {
               textFormat: Text.PlainText
               anchors.horizontalCenter: parent.horizontalCenter
               text: root.previewLoading ? "Reading"
-                : (root.previewKind === "image" && !previewImage.failed && root.previewThumbable() ? "Making a preview"
+                : (root.previewKind === "image" && !root.previewImageFailed && root.previewThumbable() ? "Making a preview"
                 : (root.previewKind === "image" ? "No preview for this image. Turn on Previews and thumbnails, or install a thumbnailer for it"
                 : (root.previewKind === "folder" ? "Folder. Press Enter to open it."
                   : (root.previewKind === "remoteaudio" ? "Audio preview is off for network folders. Press Enter to open it."
@@ -3806,6 +3832,31 @@ Item {
                       checked: root.boolSetting(modelData.key, modelData.fallback !== false)
                       onClicked: root.applySettingNow(modelData.key, !checked)
                     }
+                  }
+
+                  Dropdown {
+                    objectName: "previewSizeSetting"
+                    width: parent.width
+                    label: "Image preview size"
+                    value: root.textSetting("previewSize", "auto")
+                    options: [
+                      { label: "Automatic, sharp on your screen", value: "auto" },
+                      { label: "1024 px, quickest", value: "1024" },
+                      { label: "2048 px", value: "2048" },
+                      { label: "4096 px, for 4K screens", value: "4096" },
+                      { label: "7680 px, for 8K pictures", value: "7680" }
+                    ]
+                    onChanged: function (v) { root.applySettingNow("previewSize", v) }
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    text: "The Space preview. Bigger is sharper when you zoom in, takes a few seconds the first time, and is kept in Omafile's cache. Automatic stops at 4096 px."
+                    color: Util.alpha(Color.popups.text, 0.5)
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.Wrap
                   }
 
                   Dropdown {
@@ -4470,8 +4521,6 @@ Item {
         description: "List folders above files whatever the sort order" },
       { key: "thumbnails", label: "Previews and thumbnails",
         description: "Show images, video frames and document pages instead of a generic icon" },
-      { key: "largePreviews", label: "Sharper image previews", fallback: false,
-        description: "Make the Space preview up to 2048 px instead of 1024 px, for zooming in. They take longer to make and are kept in Omafile's own cache" },
       { key: "rememberFolderViews", label: "Remember the view for each folder",
         description: "A folder opens in the view you last picked there. Other folders open in the default view" },
       { key: "extractOnOpen", label: "Extract archives when opened", fallback: false,

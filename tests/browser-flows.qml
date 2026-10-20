@@ -996,14 +996,37 @@ ShellRoot {
         compare(browser.previewZoom, 1)
         browser.closePreview()
 
-        mock.updateSetting("largePreviews", true)
+        compare(browser.previewSide, 1024, "automatic keeps the standard preview on a small window")
+        verify(!findChild(browser, "previewBase").active, "and makes no second preview")
+
+        function buckets() { return mock.calls.filter(function (c) { return c.name === "thumbnailFor" }).map(function (c) { return c.args[2] }) }
+        mock.updateSetting("previewSize", "4096")
         mock.calls = []
         browser.showPreview(png)
-        tryVerify(function () { return mock.called("thumbnailFor") !== null })
-        compare(mock.called("thumbnailFor").args[2], "preview", "sharper previews ask the helper for 2048 px")
+        tryVerify(function () { return buckets().indexOf("preview-4096") >= 0 })
+        verify(buckets().indexOf("xx-large") >= 0, "the standard preview shows while the big one is made")
+        tryCompare(image, "status", Image.Ready)
+        verify(!findChild(browser, "previewBase").visible, "the standard preview steps aside once the big one is ready")
         browser.closePreview()
         compare(browser.previewZoom, 1, "closing resets the zoom")
-        mock.updateSetting("largePreviews", false)
+
+        mock.thumbResults = { "preview-4096": "" }
+        mock.calls = []
+        browser.showPreview(png)
+        var base = findChild(browser, "previewBase")
+        tryCompare(base, "status", Image.Ready)
+        verify(base.visible, "if the big preview cannot be made the standard one stays")
+        verify(browser.previewImageReady)
+        verify(findChild(browser, "previewZoomArea").enabled, "and can still be zoomed")
+        browser.closePreview()
+        mock.thumbResults = ({})
+
+        mock.updateSetting("previewSize", "7680")
+        mock.calls = []
+        browser.showPreview(png)
+        tryVerify(function () { return buckets().indexOf("preview-7680") >= 0 })
+        browser.closePreview()
+        mock.updateSetting("previewSize", "auto")
         mock.thumbResult = ""
         mock.thumbExts = savedExts
       }
@@ -1718,6 +1741,16 @@ ShellRoot {
         browser.runAction("transcode")
         compare(browser.transcodeFormat, "png", "the last picture choice is kept")
         compare(browser.transcodeResolution, "low")
+        var sizes = findChild(browser, "transcodeSize")
+        verify(sizes.options.map(function (o) { return o.value }).indexOf("original") >= 0, "pictures can keep their size")
+        sizes.changed("original")
+        mock.calls = []
+        browser.submitDialog()
+        compare(mock.called("transcodePaths").args[2], "original")
+
+        browser.menuEntry = clip
+        browser.runAction("transcode")
+        verify(findChild(browser, "transcodeSize").options.map(function (o) { return o.value }).indexOf("original") >= 0, "so can videos")
         browser.closeDialog()
 
         mock.transcodeResult = { error: "could not transcode this file", code: "EFAIL" }

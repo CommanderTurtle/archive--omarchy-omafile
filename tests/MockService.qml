@@ -188,7 +188,12 @@ QtObject {
     else if (onDone) onDone({ path: out ? out.path : path.replace(/\.zip$/, "") })
   }
   property string thumbResult: ""
-  function thumbnailFor(path, mtime, bucket, onReady) { record("thumbnailFor", [path, mtime, bucket]); onReady(thumbResult); return null }
+  property var thumbResults: ({})
+  function thumbnailFor(path, mtime, bucket, onReady) {
+    record("thumbnailFor", [path, mtime, bucket])
+    onReady(thumbResults[bucket] !== undefined ? thumbResults[bucket] : thumbResult)
+    return null
+  }
   function releaseThumbnail(ticket) {}
   function finishPick(result, request) { record("finishPick", [result, request]); pickRequest = null }
   property var systemClipboard: null

@@ -346,9 +346,12 @@ such as a pipe or a device, fails with `EINVAL` without being read.
 
 Replies `{"t": "thumb", "thumb": "/home/me/.cache/thumbnails/large/<md5>.png"}` then
 `done`. Cancellable. `size` is one of `large` (256 px, the default), `x-large` (512),
-`xx-large` (1024) or `preview` (2048). `preview` is not part of the standard: it is made by
-the same thumbnailer, checked the same way with a 2048 px limit, and kept in
-`$XDG_CACHE_HOME/omafile/previews`, which keeps the newest 200 and is never thumbnailed itself. The cache follows the freedesktop Thumbnail Managing Standard, so
+`xx-large` (1024), `preview-2048`, `preview-4096` or `preview-7680`. The `preview-` sizes are not part
+of the standard: they are made by the same thumbnailer with up to 90 seconds instead of 20,
+checked the same way with their own size limit, and kept in
+`$XDG_CACHE_HOME/omafile/previews/<size>`. That cache keeps the newest 2 GB or 500 files across all
+sizes, a hit counts as new, and it is never thumbnailed itself. Thumbnails are read and copied a
+chunk at a time, so the helper never holds a whole large preview in memory. The cache follows the freedesktop Thumbnail Managing Standard, so
 thumbnails made by GNOME Files and other file managers are reused and theirs reuse ours.
 A cached thumbnail counts only when its `Thumb::URI` and `Thumb::MTime` match the file,
 it is no larger than 1024 px on either side, and it holds nothing but pixel chunks
@@ -514,8 +517,9 @@ tool's message. The temporary file is removed on failure.
 ```
 
 Cancellable. Every path must be absolute. `format` is `jpg` or `png` for pictures and `mp4` or
-`gif` for videos. `resolution` is `high`, `medium` or `low` for pictures and `4k`, `1080p` or
-`720p` for videos. Each file is opened as a handle and recognised by its first bytes;
+`gif` for videos. `resolution` is `high`, `medium`, `low` or `original` for pictures and `4k`, `1080p`,
+`720p` or `original` for videos. `original` does not resize, except that video sizes are rounded
+down to even numbers. Each file is opened as a handle and recognised by its first bytes;
 anything that is not a PNG, JPEG, GIF, WebP, TIFF, BMP, HEIC or AVIF picture or an MP4, MOV,
 Matroska, AVI, MPEG or FLV video is refused without running a tool. Pictures go through
 `magick` with the input format pinned (`PNG:/proc/self/fd/<n>[0]`), `-auto-orient`, `-strip` and

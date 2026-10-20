@@ -1689,6 +1689,15 @@ class TranscodeTests(HelperTestCase):
         self.assertEqual(picture[-1], "JPEG:/proc/self/fd/6")
         self.assertIn("-strip", picture)
         self.assertIn("-limit", picture)
+        original = helper.transcode_argv("picture", "JPEG", "png", "original", 5, 6, programs)
+        self.assertNotIn("-resize", original, "original size keeps every pixel")
+        self.assertIn("-auto-orient", original)
+        self.assertIn("-strip", original)
+        same = helper.transcode_argv("video", None, "mp4", "original", 5, 6, programs)
+        self.assertEqual(same[same.index("-vf") + 1], "scale=trunc(iw/2)*2:trunc(ih/2)*2", "only rounded to even sizes for H.264")
+        self.assertEqual(same[same.index("-c:v") + 1], "libx264")
+        gif = helper.transcode_argv("video", None, "gif", "original", 5, 6, programs)
+        self.assertIn("scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=lanczos", gif[gif.index("-vf") + 1])
         video = helper.transcode_argv("video", None, "mp4", "720p", 5, 6, programs)
         self.assertEqual(video[video.index("-protocol_whitelist") + 1], "file")
         self.assertEqual(video[video.index("-format_whitelist") + 1], helper.TRANSCODE_DEMUXERS)
@@ -1727,27 +1736,107 @@ class PreviewSizeTests(unittest.TestCase):
         header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
         return [(b"IHDR", header), (b"IDAT", zlib.compress(b"\0")), (b"IEND", b"")]
 
-    def test_sharper_previews_live_in_omafiles_own_cache_and_stop_at_2048(self):
+    def png_file(self, path, width, height, extra=b"", idat_parts=3):
         helper = load_helper_module()
-        folder, side, limit = helper.thumb_place("/home/u/.cache/thumbnails", helper.PREVIEW_BUCKET)
-        self.assertEqual(folder, helper.preview_root())
-        self.assertNotIn("/thumbnails", folder)
-        self.assertEqual(side, 2048)
+        header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+        pixels = zlib.compress(os.urandom(4096))
+        step = len(pixels) // idat_parts + 1
+        body = helper.png_chunk(b"IHDR", header) + extra
+        for i in range(0, len(pixels), step):
+            body += helper.png_chunk(b"IDAT", pixels[i:i + step])
+        with open(path, "wb") as f:
+            f.write(helper.PNG_MAGIC + body + helper.png_chunk(b"IEND", b""))
+        return pixels
+
+    def test_big_previews_live_in_omafiles_own_cache_and_stop_at_7680(self):
+        helper = load_helper_module()
+        for bucket, side in (("preview-2048", 2048), ("preview-4096", 4096), ("preview-7680", 7680)):
+            folder, got, limit = helper.thumb_place("/home/u/.cache/thumbnails", bucket)
+            self.assertEqual(folder, os.path.join(helper.preview_root(), str(side)))
+            self.assertNotIn("/thumbnails", folder)
+            self.assertEqual(got, side)
+            self.assertGreaterEqual(limit, side * side * 8)
+            self.assertTrue(helper.safe_thumb(self.png(side, side // 2), side))
+            self.assertFalse(helper.safe_thumb(self.png(side + 1, 10), side))
         self.assertEqual(helper.thumb_place("/c/thumbnails", "xx-large"), ("/c/thumbnails/xx-large", 1024, helper.THUMB_MAX_READ))
-        self.assertTrue(helper.safe_thumb(self.png(2048, 1536), side))
-        self.assertFalse(helper.safe_thumb(self.png(2049, 10), side))
         self.assertFalse(helper.safe_thumb(self.png(2048, 1536)), "the shared cache still stops at 1024")
 
-    def test_old_previews_are_pruned(self):
+    def test_the_preview_cache_keeps_the_newest_within_its_size_and_count(self):
+        helper = load_helper_module()
+        with tempfile.TemporaryDirectory() as root:
+            os.mkdir(os.path.join(root, "4096"))
+            os.mkdir(os.path.join(root, "7680"))
+            os.mkdir(os.path.join(root, "elsewhere"))
+            for i in range(6):
+                path = os.path.join(root, "4096" if i % 2 else "7680", "%d.png" % i)
+                with open(path, "wb") as f:
+                    f.write(b"x" * 100)
+                os.utime(path, (1000 + i, 1000 + i))
+            with open(os.path.join(root, "legacy.png"), "wb") as f:
+                f.write(b"x")
+            with open(os.path.join(root, "elsewhere", "keep.png"), "wb") as f:
+                f.write(b"x")
+            helper.prune_previews(root, keep=10, budget=350)
+            left = sorted(n for d in ("4096", "7680") for n in os.listdir(os.path.join(root, d)))
+            self.assertEqual(left, ["3.png", "4.png", "5.png"], "the newest that fit in the byte budget stay")
+            self.assertFalse(os.path.exists(os.path.join(root, "legacy.png")), "previews from 1.4.6 are removed")
+            self.assertTrue(os.path.exists(os.path.join(root, "elsewhere", "keep.png")), "nothing else is touched")
+            helper.prune_previews(root, keep=1, budget=1 << 30)
+            left = sorted(n for d in ("4096", "7680") for n in os.listdir(os.path.join(root, d)))
+            self.assertEqual(left, ["5.png"])
+
+    def test_a_png_is_scanned_without_reading_its_pixels_and_copied_with_only_pixel_chunks(self):
         helper = load_helper_module()
         with tempfile.TemporaryDirectory() as tmp:
-            for i in range(5):
-                path = os.path.join(tmp, "%d.png" % i)
-                with open(path, "wb") as f:
-                    f.write(b"x")
-                os.utime(path, (1000 + i, 1000 + i))
-            helper.prune_previews(tmp, 3)
-            self.assertEqual(sorted(os.listdir(tmp)), ["2.png", "3.png", "4.png"])
+            src = os.path.join(tmp, "in.png")
+            extra = helper.png_chunk(b"eXIf", b"gps" * 10) + helper.png_chunk(b"tEXt", b"Comment\0hi")
+            pixels = self.png_file(src, 64, 32, extra=extra)
+            with open(src, "rb") as f:
+                chunks = helper.png_scan(f, 1 << 20)
+                kinds = [c[0] for c in chunks]
+                self.assertEqual(kinds[:3], [b"IHDR", b"eXIf", b"tEXt"])
+                self.assertTrue(all(c[1] == b"" for c in chunks if c[0] == b"IDAT"), "pixel data is never read into memory")
+                self.assertEqual(helper.png_size(chunks), (64, 32))
+                self.assertFalse(helper.safe_thumb(chunks, 1024), "a scanned file with metadata is not trusted as is")
+                out = os.path.join(tmp, "sub", "out.png")
+                helper.write_png_from(out, f, chunks, {"Thumb::URI": "file:///a", "Thumb::MTime": "5"})
+            with open(out, "rb") as f:
+                data = f.read()
+            copied = helper.png_chunks(data)
+            self.assertEqual([c[0] for c in copied], [b"IHDR", b"tEXt", b"tEXt", b"IDAT", b"IDAT", b"IDAT", b"IEND"])
+            self.assertEqual(b"".join(body for kind, body in copied if kind == b"IDAT"), pixels)
+            self.assertEqual(helper.png_text(copied), {"Thumb::URI": "file:///a", "Thumb::MTime": "5"})
+            pos = 8
+            while pos < len(data):
+                length, kind = struct.unpack(">I4s", data[pos:pos + 8])
+                crc = struct.unpack(">I", data[pos + 8 + length:pos + 12 + length])[0]
+                self.assertEqual(crc, zlib.crc32(kind + data[pos + 8:pos + 8 + length]) & 0xffffffff)
+                pos += 12 + length
+            self.assertEqual(stat.S_IMODE(os.stat(out).st_mode), 0o600)
+            with open(out, "rb") as f:
+                self.assertTrue(helper.safe_thumb(helper.png_scan(f, 1 << 20), 1024))
+
+    def test_a_scan_refuses_truncated_oversized_or_text_heavy_files(self):
+        helper = load_helper_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "a.png")
+            self.png_file(path, 8, 8)
+            with open(path, "rb") as f:
+                data = f.read()
+            with open(path, "wb") as f:
+                f.write(data[:-20])
+            with open(path, "rb") as f:
+                self.assertIsNone(helper.png_scan(f, 1 << 20), "a cut off file")
+            self.png_file(path, 8, 8)
+            with open(path, "rb") as f:
+                self.assertIsNone(helper.png_scan(f, 100), "a file over the limit")
+            self.png_file(path, 8, 8, extra=helper.png_chunk(b"tEXt", b"k\0" + b"v" * (helper.THUMB_TEXT_LIMIT + 1)))
+            with open(path, "rb") as f:
+                self.assertIsNone(helper.png_scan(f, 1 << 20), "a text chunk over the limit")
+            with open(path, "wb") as f:
+                f.write(b"GIF89a" + b"\0" * 64)
+            with open(path, "rb") as f:
+                self.assertIsNone(helper.png_scan(f, 1 << 20), "not a PNG")
 
 
 class MountableDeviceTests(unittest.TestCase):

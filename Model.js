@@ -343,6 +343,18 @@ function isArchive(entry) {
   return false;
 }
 
+var previewSides = [1024, 2048, 4096, 7680];
+var autoPreviewMax = 4096;
+
+function previewSide(choice, screenPixels) {
+  var fixed = Number(choice);
+  if (previewSides.indexOf(fixed) >= 0) return fixed;
+  var need = Number(screenPixels) || 0;
+  for (var i = 0; i < previewSides.length; i++)
+    if (previewSides[i] >= need || previewSides[i] >= autoPreviewMax) return previewSides[i];
+  return autoPreviewMax;
+}
+
 var transcodePictureExts = toSet(['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff']);
 var transcodeVideoExts = toSet(['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', 'mpg', 'mpeg', 'ts', 'flv']);
 
@@ -1009,7 +1021,7 @@ function isImageName(name) {
   return !!imageExtSet[extOf(String(name || ''))];
 }
 
-var imagePreviewLimit = 64 * 1024 * 1024;
+var imagePreviewLimit = 1024 * 1024 * 1024;
 
 function previewKind(entry) {
   if (!entry) return 'none';

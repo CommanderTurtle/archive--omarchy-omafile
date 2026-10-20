@@ -44,7 +44,7 @@
       "glyph": "",
       "showDrives": true,
       "thumbnails": true,
-      "largePreviews": false,
+      "previewSize": "auto",
       "gridCaption1": "none",
       "gridCaption2": "none",
       "gridCaption3": "none",
@@ -173,10 +173,10 @@
         "defaultValue": true
       },
       {
-        "key": "largePreviews",
-        "type": "boolean",
-        "label": "Make the Space preview up to 2048 px instead of 1024 px",
-        "defaultValue": false
+        "key": "previewSize",
+        "type": "string",
+        "label": "Image preview size: auto, 1024, 2048, 4096 or 7680",
+        "defaultValue": "auto"
       },
       {
         "key": "gridCaption1",

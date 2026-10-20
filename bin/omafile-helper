@@ -2140,10 +2140,11 @@ PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 PIXEL_CHUNKS = frozenset([b"IHDR", b"PLTE", b"tRNS", b"IDAT", b"IEND", b"gAMA", b"sRGB", b"cHRM", b"sBIT"])
 THUMB_TEXT_LIMIT = 16384
 THUMB_MAX_SIDE = max(size for _, size in THUMB_BUCKETS)
-PREVIEW_BUCKET = "preview"
-PREVIEW_SIDE = 2048
-PREVIEW_MAX_READ = 48 * 1024 * 1024
-PREVIEW_KEEP = 200
+PREVIEW_SIDES = {"preview-2048": 2048, "preview-4096": 4096, "preview-7680": 7680}
+PREVIEW_KEEP = 500
+PREVIEW_CACHE_BYTES = 2 << 30
+PREVIEW_TIMEOUT = 90.0
+PNG_SMALL_CHUNK = 65536
 
 def thumb_root():
     base = os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache")
@@ -2153,28 +2154,52 @@ def preview_root():
     base = os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache")
     return os.path.join(base, "omafile", "previews")
 
+def png_read_limit(side):
+    return side * side * 8 + (1 << 20)
+
 def thumb_place(root, bucket):
-    if bucket == PREVIEW_BUCKET:
-        return preview_root(), PREVIEW_SIDE, PREVIEW_MAX_READ
+    if bucket in PREVIEW_SIDES:
+        side = PREVIEW_SIDES[bucket]
+        return os.path.join(preview_root(), str(side)), side, png_read_limit(side)
     return os.path.join(root, bucket), THUMB_BUCKET_SIZES[bucket], THUMB_MAX_READ
 
-def prune_previews(folder, keep):
+def prune_previews(root, keep=PREVIEW_KEEP, budget=PREVIEW_CACHE_BYTES):
+    files = []
     try:
-        names = [n for n in os.listdir(folder) if n.endswith(".png") and not n.startswith(".")]
+        entries = os.listdir(root)
     except OSError:
         return
-    if len(names) <= keep:
-        return
-    stamped = []
-    for name in names:
+    for entry in entries:
+        path = os.path.join(root, entry)
+        if entry.endswith(".png"):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            continue
+        if entry not in [str(side) for side in PREVIEW_SIDES.values()]:
+            continue
         try:
-            stamped.append((os.lstat(os.path.join(folder, name)).st_mtime, name))
+            names = os.listdir(path)
         except OSError:
             continue
-    stamped.sort()
-    for _, name in stamped[:max(0, len(stamped) - keep)]:
+        for name in names:
+            if not name.endswith(".png") or name.startswith("."):
+                continue
+            try:
+                st = os.lstat(os.path.join(path, name))
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode):
+                files.append((st.st_mtime, st.st_size, os.path.join(path, name)))
+    files.sort(reverse=True)
+    total = 0
+    for index, (_, size, path) in enumerate(files):
+        total += size
+        if index < keep and total <= budget:
+            continue
         try:
-            os.unlink(os.path.join(folder, name))
+            os.unlink(path)
         except OSError:
             pass
 
@@ -2344,9 +2369,38 @@ def png_chunks(data):
             return chunks
     return None
 
+def png_scan(f, max_read):
+    size = os.fstat(f.fileno()).st_size
+    if size > max_read or f.read(8) != PNG_MAGIC:
+        return None
+    chunks = []
+    pos = 8
+    while pos + 12 <= size:
+        f.seek(pos)
+        header = f.read(8)
+        if len(header) != 8:
+            return None
+        length, kind = struct.unpack(">I4s", header)
+        end = pos + 12 + length
+        if end > size:
+            return None
+        if kind == b"tEXt" and length > THUMB_TEXT_LIMIT:
+            return None
+        body = b""
+        if kind != b"IDAT" and length <= PNG_SMALL_CHUNK:
+            body = f.read(length)
+            if len(body) != length:
+                return None
+        chunks.append((kind, body, pos + 8, length))
+        pos = end
+        if kind == b"IEND":
+            return chunks
+    return None
+
 def png_text(chunks):
     out = {}
-    for kind, body in chunks:
+    for chunk in chunks:
+        kind, body = chunk[0], chunk[1]
         if kind == b"tEXt" and b"\0" in body:
             key, value = body.split(b"\0", 1)
             out[key.decode("latin-1")] = value.decode("latin-1")
@@ -2362,7 +2416,8 @@ def safe_thumb(chunks, max_side=THUMB_MAX_SIDE):
     if size is None or not (0 < size[0] <= max_side and 0 < size[1] <= max_side):
         return False
     text = 0
-    for kind, body in chunks:
+    for chunk in chunks:
+        kind, body = chunk[0], chunk[1]
         if kind == b"tEXt":
             text += len(body)
         elif kind not in PIXEL_CHUNKS:
@@ -2383,10 +2438,8 @@ def blank_png():
 
 def thumb_matches(path, uri, mtime, max_side=THUMB_MAX_SIDE, max_read=THUMB_MAX_READ):
     try:
-        if os.path.getsize(path) > max_read:
-            return False
-        with open(path, "rb") as f:
-            chunks = png_chunks(f.read(max_read))
+        with open(path, "rb", buffering=1 << 16) as f:
+            chunks = png_scan(f, max_read)
     except OSError:
         return False
     if not chunks or not safe_thumb(chunks, max_side):
@@ -2400,9 +2453,16 @@ def thumb_matches(path, uri, mtime, max_side=THUMB_MAX_SIDE, max_read=THUMB_MAX_
         return False
 
 def find_thumb(root, name, uri, mtime, bucket):
-    if bucket == PREVIEW_BUCKET:
-        candidate = os.path.join(preview_root(), name)
-        return candidate if thumb_matches(candidate, uri, mtime, PREVIEW_SIDE, PREVIEW_MAX_READ) else None
+    if bucket in PREVIEW_SIDES:
+        folder, side, limit = thumb_place(root, bucket)
+        candidate = os.path.join(folder, name)
+        if not thumb_matches(candidate, uri, mtime, side, limit):
+            return None
+        try:
+            os.utime(candidate)
+        except OSError:
+            pass
+        return candidate
     start = [b for b, _ in THUMB_BUCKETS].index(bucket)
     for folder, _ in THUMB_BUCKETS[start:]:
         candidate = os.path.join(root, folder, name)
@@ -2445,6 +2505,47 @@ def write_png(path, chunks, fields):
             pass
         raise
 
+def copy_png_chunk(out, src, kind, body, offset, length):
+    out.write(struct.pack(">I", length) + kind)
+    crc = zlib.crc32(kind)
+    if len(body) == length:
+        out.write(body)
+        crc = zlib.crc32(body, crc)
+    else:
+        src.seek(offset)
+        left = length
+        while left > 0:
+            piece = src.read(min(left, 1 << 20))
+            if not piece:
+                raise OSError(errno.EIO, "the thumbnail ended early")
+            out.write(piece)
+            crc = zlib.crc32(piece, crc)
+            left -= len(piece)
+    out.write(struct.pack(">I", crc & 0xffffffff))
+
+def write_png_from(path, src, chunks, fields):
+    folder = os.path.dirname(path)
+    private_makedirs(folder)
+    kept = [c for c in chunks if c[0] in PIXEL_CHUNKS]
+    text = []
+    for k, v in fields.items():
+        body = k.encode("latin-1") + b"\0" + v.encode("latin-1", errors="replace")
+        text.append((b"tEXt", body, 0, len(body)))
+    fd, tmp = tempfile.mkstemp(prefix=".omafile-", suffix=".png", dir=folder)
+    try:
+        with os.fdopen(fd, "wb", buffering=1 << 20) as out:
+            out.write(PNG_MAGIC)
+            for kind, body, offset, length in kept[:1] + text + kept[1:]:
+                copy_png_chunk(out, src, kind, body, offset, length)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
 def expand_thumb_command(command, path, uri, out, size):
     try:
         args = shlex.split(command)
@@ -2465,7 +2566,7 @@ def expand_thumb_command(command, path, uri, out, size):
         result.append("".join(piece))
     return result
 
-def run_thumbnailer(args, cancel_event):
+def run_thumbnailer(args, cancel_event, timeout=THUMB_TIMEOUT):
     try:
         program = thumbnail_program(args[0])
         proc = subprocess.Popen([program] + args[1:], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -2476,7 +2577,7 @@ def run_thumbnailer(args, cancel_event):
         os.setpriority(os.PRIO_PROCESS, proc.pid, 10)
     except OSError:
         pass
-    deadline = time.monotonic() + THUMB_TIMEOUT
+    deadline = time.monotonic() + timeout
     while True:
         try:
             code = proc.wait(timeout=0.2)
@@ -2505,22 +2606,22 @@ def generate_thumb(root, name, src, uri, st, bucket, command, mime, cancel_event
         args = expand_thumb_command(command, to_str(src), uri, out, size)
         if not args:
             return "failed"
-        status = run_thumbnailer(args, cancel_event)
+        status = run_thumbnailer(args, cancel_event, PREVIEW_TIMEOUT if bucket in PREVIEW_SIDES else THUMB_TIMEOUT)
         if status != "ok":
             return status
-        try:
-            with open(out, "rb") as f:
-                chunks = png_chunks(f.read(max_read))
-        except OSError:
-            chunks = None
-        if not chunks or png_size(chunks) is None or max(png_size(chunks)) > size:
-            return "failed"
         fields = {"Thumb::URI": uri, "Thumb::MTime": str(int(st.st_mtime)),
                   "Thumb::Size": str(st.st_size), "Thumb::Mimetype": mime,
                   "Software": "Omafile " + VERSION}
-        write_png(os.path.join(folder, name), chunks, fields)
-        if bucket == PREVIEW_BUCKET:
-            prune_previews(folder, PREVIEW_KEEP)
+        try:
+            with open(out, "rb", buffering=1 << 16) as f:
+                chunks = png_scan(f, max_read)
+                if not chunks or png_size(chunks) is None or max(png_size(chunks)) > size:
+                    return "failed"
+                write_png_from(os.path.join(folder, name), f, chunks, fields)
+        except FileNotFoundError:
+            return "failed"
+        if bucket in PREVIEW_SIDES:
+            prune_previews(preview_root())
         return "ok"
     finally:
         try:
@@ -2532,7 +2633,7 @@ def op_thumb(req, cancel_event):
     req_id = req["id"]
     path = req.get("path")
     bucket = req.get("size")
-    if bucket not in THUMB_BUCKET_SIZES and bucket != PREVIEW_BUCKET:
+    if bucket not in THUMB_BUCKET_SIZES and bucket not in PREVIEW_SIDES:
         bucket = "large"
     if not isinstance(path, str) or not path.startswith("/"):
         send_error(req_id, "EINVAL", "absolute path required")
@@ -2581,7 +2682,7 @@ def op_thumb(req, cancel_event):
                 if status == "cancelled":
                     send_error(req_id, "ECANCELED", "cancelled")
                     return
-                if status == "failed" and bucket != PREVIEW_BUCKET:
+                if status == "failed" and bucket not in PREVIEW_SIDES:
                     try:
                         marker = os.path.join(root, "fail", "omafile-" + VERSION, name)
                         write_png(marker, blank_png(), {"Thumb::URI": uri, "Thumb::MTime": str(mtime),
@@ -4339,8 +4440,9 @@ def op_compress(req, cancel_event):
 
 
 TRANSCODE_TIMEOUT = 6 * 3600.0
-TRANSCODE_PICTURE_SIZES = {"high": "3160x>", "medium": "2160x>", "low": "1080x>"}
-TRANSCODE_VIDEO_SIZES = {"4k": 2160, "1080p": 1080, "720p": 720}
+TRANSCODE_PICTURE_SIZES = {"high": "3160x>", "medium": "2160x>", "low": "1080x>", "original": None}
+TRANSCODE_VIDEO_SIZES = {"4k": 2160, "1080p": 1080, "720p": 720, "original": None}
+TRANSCODE_EVEN_SIZE = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
 TRANSCODE_FORMATS = {"picture": ("jpg", "png"), "video": ("mp4", "gif")}
 TRANSCODE_DEMUXERS = "mov,matroska,avi,mpegts,flv,mpeg"
 TRANSCODE_IMAGE_LIMITS = ["-limit", "memory", "1GiB", "-limit", "map", "2GiB", "-limit", "disk", "4GiB",
@@ -4378,13 +4480,15 @@ def transcode_argv(kind, coder, fmt, resolution, in_fd, out_fd, programs):
     source = "/proc/self/fd/%d" % in_fd
     target = "/proc/self/fd/%d" % out_fd
     if kind == "picture":
-        argv = [programs["magick"]] + TRANSCODE_IMAGE_LIMITS + [
-            "%s:%s[0]" % (coder, source), "-auto-orient", "-resize", TRANSCODE_PICTURE_SIZES[resolution]]
+        argv = [programs["magick"]] + TRANSCODE_IMAGE_LIMITS + ["%s:%s[0]" % (coder, source), "-auto-orient"]
+        if TRANSCODE_PICTURE_SIZES[resolution]:
+            argv += ["-resize", TRANSCODE_PICTURE_SIZES[resolution]]
         if fmt == "jpg":
             return argv + ["-quality", "85", "-strip", "JPEG:" + target]
         return argv + ["-strip", "-define", "png:compression-filter=5", "-define", "png:compression-level=9",
                        "-define", "png:compression-strategy=1", "-define", "png:exclude-chunk=all", "PNG:" + target]
-    scale = "scale=-2:%d" % TRANSCODE_VIDEO_SIZES[resolution]
+    height = TRANSCODE_VIDEO_SIZES[resolution]
+    scale = "scale=-2:%d" % height if height else TRANSCODE_EVEN_SIZE
     argv = [programs["ffmpeg"], "-nostdin", "-v", "error", "-protocol_whitelist", "file",
             "-format_whitelist", TRANSCODE_DEMUXERS, "-i", source, "-map_metadata", "-1", "-map_chapters", "-1"]
     if fmt == "gif":
@@ -4413,7 +4517,7 @@ def transcode_one(path, fmt, resolution, programs, cancel_event):
             raise ValueError("not a picture or video")
         if fmt not in TRANSCODE_FORMATS[kind]:
             raise ValueError("a %s cannot be made into %s" % (kind, fmt))
-        if (kind == "picture") != (resolution in TRANSCODE_PICTURE_SIZES):
+        if resolution not in (TRANSCODE_PICTURE_SIZES if kind == "picture" else TRANSCODE_VIDEO_SIZES):
             raise ValueError("%s is not a %s size" % (resolution, kind))
         if programs.get("magick" if kind == "picture" else "ffmpeg") is None:
             raise FileNotFoundError(errno.ENOENT, "%s is not installed" % ("ImageMagick" if kind == "picture" else "ffmpeg"))

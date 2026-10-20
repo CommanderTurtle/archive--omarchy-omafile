@@ -763,7 +763,8 @@ test('previewKind only previews regular files and links to them', function () {
   assert.equal(Model.previewKind(Model.decodeEntry(['pic.png', 'o', 0, 0, 0, '/dev/zero'], '/tmp')), 'none');
   assert.equal(Model.previewKind(Model.decodeEntry(['notes.txt', 'o', 0, 0, 0, null], '/tmp')), 'none');
   assert.equal(Model.previewKind(Model.decodeEntry(['song.mp3', 'l', 10, 0, 0, '/music/a.mp3'], '/tmp')), 'audio');
-  assert.equal(Model.previewKind(Model.decodeEntry(['huge.png', 'f', 65 * 1024 * 1024, 0, 0, null], '/tmp')), 'none');
+  assert.equal(Model.previewKind(Model.decodeEntry(['big8k.png', 'f', 170 * 1024 * 1024, 0, 0, null], '/tmp')), 'image', 'an 8K PNG is previewed');
+  assert.equal(Model.previewKind(Model.decodeEntry(['huge.png', 'f', 1024 * 1024 * 1024 + 1, 0, 0, null], '/tmp')), 'none');
 });
 
 test('glob matching stays fast on hostile patterns', function () {
@@ -785,6 +786,23 @@ test('expandFieldCodes quotes the path inside a shell script argument', function
   assert.deepEqual(expand(['/usr/bin/env', 'bash', '-c', 'cat %f'], '/tmp/$(id)'),
     ['/usr/bin/env', 'bash', '-c', "cat '/tmp/$(id)'"]);
   assert.deepEqual(expand(['app', '-c', 'x %f'], '/tmp/a b'), ['app', '-c', 'x /tmp/a b']);
+});
+
+test('previewSide matches the screen when automatic and stops at 4096', function () {
+  assert.equal(Model.previewSide('auto', 900), 1024, 'a 1080p screen keeps the standard preview');
+  assert.equal(Model.previewSide('auto', 1024), 1024);
+  assert.equal(Model.previewSide('auto', 1800), 2048);
+  assert.equal(Model.previewSide('auto', 3192), 4096, 'a 4K screen gets a 4096 px preview');
+  assert.equal(Model.previewSide('auto', 7000), 4096, 'automatic never makes 8K previews on its own');
+  assert.equal(Model.previewSide('auto', 0), 1024);
+  assert.equal(Model.previewSide(undefined, 3000), 4096);
+});
+
+test('previewSide uses a fixed choice as is and ignores anything else', function () {
+  assert.equal(Model.previewSide('1024', 4000), 1024);
+  assert.equal(Model.previewSide('2048', 500), 2048);
+  assert.equal(Model.previewSide('7680', 500), 7680);
+  assert.equal(Model.previewSide('100000', 500), 1024, 'an unknown size falls back to automatic');
 });
 
 test('transcodeKind sorts pictures and videos by extension and skips everything else', function () {

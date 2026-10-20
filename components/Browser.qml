@@ -619,8 +619,6 @@ Item {
   }
   function forgetPassphrase() {
     unlockField.text = ""
-    unlockField.editUndo = []
-    unlockField.editRedo = []
   }
   function forgetUnlock() {
     forgetPassphrase()
@@ -3885,6 +3883,7 @@ Item {
 
             EditField {
               id: passwordField
+              objectName: "passwordField"
               width: parent.width
               visible: !root.connectAnonymous
               placeholderText: "Password"

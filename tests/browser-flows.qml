@@ -681,6 +681,17 @@ ShellRoot {
         tryCompare(user, "text", "menno")
         compare(browser.connectFailed, true)
         verify(browser.connectStatus.indexOf("Permission denied") === 0, browser.connectStatus)
+        var password = findChild(browser, "passwordField")
+        tryCompare(password, "activeFocus", true)
+        keyClick(Qt.Key_A)
+        keyClick(Qt.Key_B)
+        keyClick(Qt.Key_Backspace)
+        compare(password.text, "a", "the password field still edits")
+        compare(password.editUndo.length, 0, "a password keeps no undo history")
+        keyClick(Qt.Key_Z, Qt.ControlModifier)
+        compare(password.text, "a", "so undo cannot bring a typed password back")
+        keyClick(Qt.Key_Y, Qt.ControlModifier)
+        compare(password.text, "a", "and neither can redo")
         browser.closeDialog()
 
         mock.calls = []
@@ -791,6 +802,13 @@ ShellRoot {
         compare(browser.dialogMode, "unlock", "a wrong passphrase keeps the dialog open")
         compare(browser.unlockStatus, "Wrong passphrase. Try again.")
         compare(field.text, "", "a wrong passphrase is cleared")
+        tryCompare(field, "activeFocus", true)
+        keyClick(Qt.Key_A)
+        keyClick(Qt.Key_B)
+        compare(field.text, "ab", "typing edits the passphrase")
+        compare(field.editUndo.length, 0, "a passphrase keeps no undo history")
+        keyClick(Qt.Key_Z, Qt.ControlModifier)
+        compare(field.text, "ab", "and undo leaves it alone")
 
         mock.unlockResult = { path: "/tmp/docs" }
         mock.calls = []

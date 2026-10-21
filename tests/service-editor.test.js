@@ -42,6 +42,9 @@ function plan(c) {
 
 test('with nothing chosen Omafile asks, and Omarchy\'s default needs no check', () => {
   assert.deepEqual(plan(service({}, {}).c), { ask: true, error: '' });
+  const builtIn = service({ editorChoice: 'omafile', editor: 'code' }, {});
+  assert.deepEqual(plan(builtIn.c), { mode: 'omafile' });
+  assert.deepEqual(builtIn.asked, [], 'Omafile\'s own editor needs no lookup either');
   const omarchy = service({ editorChoice: 'omarchy', editor: 'code' }, {});
   assert.deepEqual(plan(omarchy.c), { mode: 'omarchy' });
   assert.deepEqual(omarchy.asked, [], 'Omarchy picks its own fallback, so nothing is looked up');
@@ -58,11 +61,13 @@ test('your own editor is used only when its program exists', () => {
 test('Omarchy\'s editor, a window editor and a terminal editor each launch the right way', () => {
   const { c, launched } = service({}, {});
   c.launchEditor({ mode: 'omarchy' }, ['/a.txt', '/b.txt']);
+  c.launchEditor({ mode: 'omafile' }, ['/dir']);
   c.launchEditor({ mode: 'own', command: 'code' }, ['/a.txt']);
   c.launchEditor({ mode: 'own', command: 'nano -w' }, ['/a b.txt']);
   c.launchEditor({ mode: 'own', command: 'code' }, []);
   assert.deepEqual(launched, [
     ['omarchy-launch-editor', '/a.txt', '/b.txt'],
+    ['omarchy-launch-editor', '/dir'],
     ['setsid', 'uwsm-app', '--', 'sh', '-c', 'code "$@"', 'omafile', '/a.txt'],
     ['omarchy-launch-tui', '--app-id=org.omarchy.nano', 'sh', '-c', 'nano -w "$@"', 'omafile', '/a b.txt']
   ]);

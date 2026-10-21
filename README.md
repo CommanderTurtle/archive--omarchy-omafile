@@ -117,7 +117,7 @@ Right click a picture or video, or several, and choose **Transcode…** to make 
 
 ### Editing text
 
-Right click a text file and choose **Edit text**, or press Ctrl+E, to edit it inside Omafile without opening another app. It is meant for quick changes to config files, notes and scripts up to 1 MB.
+Right click a text file and choose **Edit**, or press Ctrl+E, to edit it inside Omafile without opening another app. It is meant for quick changes to config files, notes and scripts up to 1 MB.
 
 * Ctrl+S saves. A dot before the name means there are unsaved changes, and closing asks whether to save them.
 * Ctrl+Z and Ctrl+Shift+Z undo and redo, a word at a time. Ctrl+X, Ctrl+C and Ctrl+V cut, copy and paste.
@@ -184,6 +184,7 @@ Open in editor, right under Open with, opens the selected files or folders in an
 | Choice | What it does |
 |--------|--------------|
 | Omarchy's default | Follows `omarchy default editor`, so changing it there changes it here |
+| Omafile's editor | Opens a text file in Omafile's own editor, the same as **Edit**. Folders, several files at once, and files it cannot edit open in Omarchy's default editor instead |
 | An editor you have | VS Code, Zed, Neovim, nano and the others Omafile finds installed. Terminal editors open in your terminal. For an editor Omarchy knows, **Also make it Omarchy's default editor** sets it for all of Omarchy too |
 | A command you type | Anything on your `PATH`, such as `code --new-window` or `alacritty -e nvim` |
 
@@ -392,7 +393,7 @@ Configure these keys through the Omarchy bar widget settings:
 | `editorAutoSave` | The text editor saves a second after you stop typing and when it closes. Off by default |
 | `extractOnOpen` | Double click and Enter extract archives instead of opening them. Off by default |
 | `terminal` | Terminal command to open in the current directory |
-| `editorChoice` | Open in editor: empty to ask the first time, `omarchy` for Omarchy's default, `own` for `editor` |
+| `editorChoice` | Open in editor: empty to ask the first time, `omarchy` for Omarchy's default, `omafile` for Omafile's own editor, `own` for `editor` |
 | `editor` | Editor command, used when `editorChoice` is `own` |
 | `agent` | Command Open ... here runs in a terminal. Empty for your Omarchy default agent, then Claude Code |
 | `showTransferBadge` | Show a progress ring on the bar icon while a transfer runs |

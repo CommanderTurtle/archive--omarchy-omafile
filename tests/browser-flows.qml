@@ -1507,7 +1507,7 @@ ShellRoot {
         tryCompare(browser, "dialogMode", "editorpick")
         compare(mock.called("launchEditor"), null, "nothing opens before you choose")
         verify(mock.called("refreshDefaults") !== null)
-        compare(values(), ["omarchy", "app:code", "app:nvim", "app:nano", "own"], "Omarchy's default, the editors you have, or a command")
+        compare(values(), ["omarchy", "omafile", "app:code", "app:nvim", "app:nano", "own"], "Omarchy's default, Omafile's editor, the editors you have, or a command")
         compare(browser.editorPickOptions()[0].label, "Omarchy's default, Neovim")
         keyClick(Qt.Key_Escape)
         compare(browser.dialogMode, "")
@@ -1530,6 +1530,8 @@ ShellRoot {
         browser.menuEntry = file
         browser.runAction("editor")
         tryCompare(browser, "dialogMode", "editorpick")
+        keyClick(Qt.Key_Down)
+        compare(browser.editorPick, "omafile")
         keyClick(Qt.Key_Down)
         compare(browser.editorPick, "app:code")
         verify(browser.editorPickCanAlso, "VS Code can also become Omarchy's default")
@@ -1590,6 +1592,62 @@ ShellRoot {
         mock.omarchyAgent = ""
         mock.claudeAvailable = false
         mock.updateSetting("editorChoice", "omarchy")
+      }
+
+      function test_9cc_omafileEditorAsDefault() {
+        waitRows()
+        mock.updateSetting("editorChoice", "")
+        mock.updateSetting("editor", "")
+        mock.textFiles = { "/tmp/alpha.yml": { text: "key: value\n" } }
+        var alpha = Model.decodeEntry(["alpha.yml", "f", 30, 300, 420, null], "/tmp")
+        var view = editorView()
+        mock.calls = []
+        browser.menuEntry = alpha
+        browser.runAction("editor")
+        tryCompare(browser, "dialogMode", "editorpick")
+        browser.chooseEditorPick("omafile")
+        keyClick(Qt.Key_Return)
+        compare(mock.editorChoice, "omafile", "Omafile's editor can be the default")
+        verify(view.open, "the file opens in Omafile's editor")
+        compare(mock.called("launchEditor"), null, "no other app is started")
+        tryCompare(view, "loading", false)
+        view.finishClose()
+
+        mock.calls = []
+        browser.menuEntry = alpha
+        browser.runAction("editor")
+        compare(browser.dialogMode, "", "it is not asked again")
+        verify(view.open, "Open in editor goes straight to Omafile's editor")
+        tryCompare(view, "loading", false)
+        view.finishClose()
+
+        var docs = Model.decodeEntry(["docs", "d", 0, 200, 493, null], "/tmp")
+        mock.calls = []
+        browser.menuEntry = docs
+        browser.runAction("editor")
+        compare(view.open, false)
+        compare(mock.called("launchEditor").args[0].mode, "omarchy", "a folder opens in Omarchy's default editor")
+        compare(mock.called("launchEditor").args[1], ["/tmp/docs"])
+        verify(browser.statusText.indexOf("one text file at a time") > 0, browser.statusText)
+
+        pane().setSortOrder("name", false)
+        pane().setCursor(names().indexOf("alpha.yml"), false, false)
+        pane().setCursor(names().indexOf("beta.png"), false, true)
+        mock.calls = []
+        browser.menuEntry = pane().cursorEntry()
+        browser.runAction("editor")
+        compare(view.open, false)
+        compare(mock.called("launchEditor").args[1].length, 2, "several files open together in Omarchy's default editor")
+        pane().clearSelection()
+
+        compare(browser.editorSettingValue, "omafile")
+        verify(browser.editorSettingOptions().map(function (o) { return o.value }).indexOf("omafile") === 2)
+        browser.chooseEditorSetting("omarchy")
+        compare(mock.editorChoice, "omarchy")
+        browser.chooseEditorSetting("omafile")
+        compare(mock.editorChoice, "omafile")
+        mock.updateSetting("editorChoice", "omarchy")
+        mock.textFiles = ({})
       }
 
       function test_9d_pasteFromSystemClipboard() {
@@ -1814,9 +1872,9 @@ ShellRoot {
         var alpha = Model.decodeEntry(["alpha.yml", "f", 30, 300, 420, null], "/tmp")
         var png = Model.decodeEntry(["beta.png", "f", 10, 100, 420, null], "/tmp")
         var docs = Model.decodeEntry(["docs", "d", 0, 200, 493, null], "/tmp")
-        verify(menuLabels(browser.contextActions(alpha)).indexOf("Edit text") >= 0, "text files can be edited")
-        verify(menuLabels(browser.contextActions(png)).indexOf("Edit text") < 0, "pictures cannot")
-        verify(menuLabels(browser.contextActions(docs)).indexOf("Edit text") < 0, "folders cannot")
+        verify(menuLabels(browser.contextActions(alpha)).indexOf("Edit") >= 0, "text files can be edited")
+        verify(menuLabels(browser.contextActions(png)).indexOf("Edit") < 0, "pictures cannot")
+        verify(menuLabels(browser.contextActions(docs)).indexOf("Edit") < 0, "folders cannot")
 
         mock.textFiles = { "/tmp/alpha.yml": { text: "key: value\n  nested: a b\n" } }
         mock.calls = []

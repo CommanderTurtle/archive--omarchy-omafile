@@ -1240,34 +1240,52 @@ Item {
   readonly property string editorSettingValue: {
     if (!service) return ""
     if (service.editorChoice === "omarchy") return "omarchy"
+    if (service.editorChoice === "omafile") return "omafile"
     var command = service.editorCommand
     if (!editorOwnTyping && command && Model.knownEditor(command) && service.programsFound[command] === true) return "app:" + command
     return command || editorOwnTyping ? "own" : ""
   }
 
-  function requestEditor(paths) {
-    if (!service || paths.length === 0) return
+  function requestEditor(entries) {
+    if (!service || entries.length === 0) return
     service.editorPlan(function (plan) {
       if (plan.ask) {
-        root.askEditor(paths, String(plan.error || ""))
+        root.askEditor(entries, String(plan.error || ""))
         return
       }
-      service.launchEditor(plan, paths)
-      root.afterLaunch()
+      root.openInEditor(plan, entries)
     })
   }
 
-  function askEditor(paths, badCommand) {
+  function openInEditor(plan, entries) {
+    var paths = targetPaths(entries)
+    if (plan.mode === "omafile") {
+      if (entries.length === 1 && Model.textEditable(entries[0])) {
+        editText(entries[0])
+        return
+      }
+      service.launchEditor({ mode: "omarchy" }, paths)
+      statusText = "Opened in Omarchy's default editor. Omafile's editor edits one text file at a time"
+      afterLaunch()
+      return
+    }
+    service.launchEditor(plan, paths)
+    afterLaunch()
+  }
+
+  function askEditor(entries, badCommand) {
     if (service) service.refreshDefaults()
     editorPick = "omarchy"
     editorPickAlso = false
     editorPickError = badCommand ? "\u201c" + badCommand + "\u201d is not a command Omafile can find. Pick an editor instead." : ""
-    showDialog("editorpick", "Open in editor", "", { paths: paths })
+    showDialog("editorpick", "Open in editor", "", { entries: entries })
   }
 
   function editorPickOptions() {
     var out = [{ value: "omarchy", label: "Omarchy's default, " + Model.editorName(service ? service.omarchyEditor : "nvim"),
-      description: "Follows omarchy default editor" }]
+      description: "Follows omarchy default editor" },
+      { value: "omafile", label: "Omafile's editor",
+        description: "Edits a text file right here. Folders and other files open in Omarchy's default" }]
     var apps = service ? service.editorApps : []
     for (var i = 0; i < apps.length; i++)
       out.push({ value: "app:" + apps[i].id, label: apps[i].name, description: apps[i].terminal ? "Opens in your terminal" : "" })
@@ -1291,16 +1309,15 @@ Item {
 
   function finishEditorPick(job, plan) {
     if (dialogMode === "editorpick" && dialogPayload === job) closeDialog()
-    service.launchEditor(plan, job.paths)
-    afterLaunch()
+    openInEditor(plan, job.entries)
   }
 
   function submitEditorPick() {
     var job = dialogPayload
-    if (!service || !job || !job.paths) return
-    if (editorPick === "omarchy") {
-      applySettingNow("editorChoice", "omarchy")
-      finishEditorPick(job, { mode: "omarchy" })
+    if (!service || !job || !job.entries) return
+    if (editorPick === "omarchy" || editorPick === "omafile") {
+      applySettingNow("editorChoice", editorPick)
+      finishEditorPick(job, { mode: editorPick })
       return
     }
     if (editorPick.indexOf("app:") === 0) {
@@ -1330,7 +1347,8 @@ Item {
 
   function editorSettingOptions() {
     var out = [{ label: "Ask the first time", value: "" },
-      { label: "Omarchy's default, " + Model.editorName(service ? service.omarchyEditor : "nvim"), value: "omarchy" }]
+      { label: "Omarchy's default, " + Model.editorName(service ? service.omarchyEditor : "nvim"), value: "omarchy" },
+      { label: "Omafile's editor", value: "omafile" }]
     var apps = service ? service.editorApps : []
     for (var i = 0; i < apps.length; i++) out.push({ label: apps[i].name, value: "app:" + apps[i].id })
     out.push({ label: "A command you type", value: "own" })
@@ -1342,7 +1360,7 @@ Item {
     if (value === "") {
       applySettingNow("editorChoice", "")
       applySettingNow("editor", "")
-    } else if (value === "omarchy") applySettingNow("editorChoice", "omarchy")
+    } else if (value === "omarchy" || value === "omafile") applySettingNow("editorChoice", value)
     else if (value.indexOf("app:") === 0) {
       applySettingNow("editor", value.substring(4))
       applySettingNow("editorChoice", "own")
@@ -1381,7 +1399,7 @@ Item {
       items.push({ key: "editor", label: "Open in editor", glyph: Icons.actionGlyph("editor") })
       var inTrash = Model.isTrashPath(entry.path, trashRoot())
       if (!inTrash && Model.textEditable(entry))
-        items.push({ key: "edittext", label: "Edit text", glyph: Icons.actionGlyph("rename"), hint: "Ctrl+E" })
+        items.push({ key: "edittext", label: "Edit", glyph: Icons.actionGlyph("rename"), hint: "Ctrl+E" })
       if (entry.isDir)
         items.push({ key: "opentab", label: "Open in new tab", glyph: Icons.actionGlyph("add"), hint: "Ctrl+Enter" })
       else
@@ -1713,7 +1731,7 @@ Item {
       else p.openEntry(entry)
     }
     else if (key === "openwith") showDialog("openwith", "Open " + openWithLabel(entry) + " with", "", entry)
-    else if (key === "editor") requestEditor(entry ? targetPaths(selectionTargets(entry)) : [p.path])
+    else if (key === "editor") requestEditor(entry ? selectionTargets(entry) : [{ path: p.path, name: Model.basename(p.path), isDir: true }])
     else if (key === "opentab") newTab(activeSide, entry.path)
     else if (key === "copy") doCopy()
     else if (key === "cut") doCut()

@@ -1390,8 +1390,9 @@ Item {
   }
 
   function editorPlan(onPlan) {
-    if (editorChoice === "omarchy") {
-      Qt.callLater(function () { onPlan({ mode: "omarchy" }) })
+    if (editorChoice === "omarchy" || editorChoice === "omafile") {
+      var mode = editorChoice
+      Qt.callLater(function () { onPlan({ mode: mode }) })
       return
     }
     var command = editorCommand
@@ -1408,7 +1409,7 @@ Item {
     var list = []
     for (var i = 0; i < paths.length; i++) list.push(String(paths[i]))
     if (list.length === 0 || !plan) return
-    if (plan.mode === "omarchy") {
+    if (plan.mode === "omarchy" || plan.mode === "omafile") {
       Quickshell.execDetached(["omarchy-launch-editor"].concat(list))
       return
     }

@@ -153,7 +153,7 @@
       {
         "key": "editorChoice",
         "type": "string",
-        "label": "Editor: empty to ask the first time, omarchy or own",
+        "label": "Editor: empty to ask the first time, omarchy, omafile or own",
         "defaultValue": ""
       },
       {

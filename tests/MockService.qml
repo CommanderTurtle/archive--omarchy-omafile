@@ -213,7 +213,7 @@ QtObject {
     return 0
   }
   function editorPlan(onPlan) {
-    if (editorChoice === "omarchy") { onPlan({ mode: "omarchy" }); return }
+    if (editorChoice === "omarchy" || editorChoice === "omafile") { onPlan({ mode: editorChoice }); return }
     var command = editorCommand
     if (!command) { onPlan({ ask: true, error: "" }); return }
     checkProgram(command, function (found) { onPlan(found ? { mode: "own", command: command } : { ask: true, error: command }) })

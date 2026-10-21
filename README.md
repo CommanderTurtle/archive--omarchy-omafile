@@ -125,8 +125,9 @@ Right click a text file and choose **Edit text**, or press Ctrl+E, to edit it in
 * Ctrl+F finds text. Enter or F3 goes to the next match and Shift+Enter or Shift+F3 to the previous one. A search in lower case ignores case.
 * Alt+Z, or the Wrap button, turns line wrapping on and off. PageUp and PageDown move a screen at a time.
 * Escape, Ctrl+W or the close button closes the editor.
+* **Auto save**, in the editor's header or under Settings, Browsing, saves a second after you stop typing and when the editor or its window closes. It is off by default, because apps that reload their config when it is saved, such as Hyprland, would apply each half typed change. If the file changed on disk, or a save fails, auto save pauses until you save by hand, so it never overwrites another app's changes.
 
-The file is saved exactly as you typed it, as UTF-8, keeping its Windows or Unix line endings and its byte order mark. Saving writes a new copy and swaps it in, so a crash halfway never leaves half a file, and the file keeps its permissions. A file with other hard links is written in place instead, so every name sees the change. If the file changed on disk since you opened it, saving asks whether to overwrite it or load the new version. Opening a link edits the file it points to. Files that are not UTF-8 text, that are bigger than 1 MB, that have a line over 20,000 characters, such as minified code, or that have stray carriage returns are not opened, because editing them inside the shell would be slow or would change them. Files you cannot write open read only. Omafile asks before it closes the editor with unsaved changes, but closing the window from Hyprland, or toggling the popup away with its key, closes it without asking.
+The file is saved exactly as you typed it, as UTF-8, keeping its Windows or Unix line endings and its byte order mark. Saving writes a new copy and swaps it in, so a crash halfway never leaves half a file, and the file keeps its permissions. A file with other hard links is written in place instead, so every name sees the change. If the file changed on disk since you opened it, saving asks whether to overwrite it or load the new version. Opening a link edits the file it points to. Files that are not UTF-8 text, that are bigger than 1 MB, that have a line over 20,000 characters, such as minified code, or that have stray carriage returns are not opened, because editing them inside the shell would be slow or would change them. Files you cannot write open read only. Omafile asks before it closes the editor with unsaved changes. Closing the window from Hyprland, or toggling the popup away with its key, closes it without asking: with auto save on, your changes are saved first, and with it off they are lost.
 
 ### Finding duplicates
 
@@ -388,6 +389,7 @@ Configure these keys through the Omarchy bar widget settings:
 | `useTrash` | Send deleted items to trash (vs. permanent deletion) |
 | `defaultView` | Start in `list`, `compact`, `grid` or `gallery` view |
 | `rememberFolderViews` | Open each folder in the view last picked there, and other folders in `defaultView` |
+| `editorAutoSave` | The text editor saves a second after you stop typing and when it closes. Off by default |
 | `extractOnOpen` | Double click and Enter extract archives instead of opening them. Off by default |
 | `terminal` | Terminal command to open in the current directory |
 | `editorChoice` | Open in editor: empty to ask the first time, `omarchy` for Omarchy's default, `own` for `editor` |

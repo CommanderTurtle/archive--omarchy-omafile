@@ -33,6 +33,10 @@ Rectangle {
   property string position: "Line 1, column 1"
   readonly property bool ready: open && !loading && loadError === ""
   readonly property bool dirty: ready && textArea.historyDepth !== textArea.savedDepth
+  readonly property bool autoSave: service ? service.settingNow("editorAutoSave", false) === true : false
+  property int autoSaveDelay: 1000
+  property bool autoSavePaused: false
+  readonly property bool canAutoSave: autoSave && !autoSavePaused && dirty && writable && !saving && prompt === ""
   readonly property var editKeys: ({
     ControlModifier: Qt.ControlModifier, ShiftModifier: Qt.ShiftModifier,
     AltModifier: Qt.AltModifier, MetaModifier: Qt.MetaModifier,
@@ -58,6 +62,7 @@ Rectangle {
     prompt = ""
     findOpen = false
     closeAfterSave = false
+    autoSavePaused = false
     identity = null
     Editing.load(textArea, "")
     var token = ++loadToken
@@ -125,30 +130,52 @@ Rectangle {
       view.saving = false
       if (token !== view.loadToken) return
       view.identity = { ino: m.ino, dev: m.dev, mtimeNs: m.mtimeNs, size: m.size }
+      view.autoSavePaused = false
       Editing.markSaved(textArea, mark)
       view.say("Saved", false)
       view.savedFile(target)
-      if (view.closeAfterSave) view.finishClose()
+      if (view.closeAfterSave) {
+        if (view.dirty) view.save(false)
+        else view.finishClose()
+      } else if (view.canAutoSave) autoSaveTimer.restart()
     }, function (m) {
       view.saving = false
       if (token !== view.loadToken) return
+      view.autoSavePaused = true
       if (m && m.code === "ECONFLICT") {
         view.conflictDeleted = m.message === "deleted"
         view.prompt = "conflict"
         return
       }
       view.closeAfterSave = false
-      view.say("Could not save: " + String((m && m.message) || "unknown error"), true)
+      view.say("Could not save: " + String((m && m.message) || "unknown error") + (view.autoSave ? ". Auto save is paused until you save" : ""), true)
     })
   }
 
   function requestClose() {
     if (prompt !== "") return
+    if (dirty && autoSave && writable && !autoSavePaused) {
+      autoSaveTimer.stop()
+      closeAfterSave = true
+      save(false)
+      return
+    }
     if (dirty) {
       prompt = "unsaved"
       return
     }
     finishClose()
+  }
+
+  function setAutoSave(on) {
+    if (service) service.updateSetting("editorAutoSave", on === true)
+  }
+
+  onCanAutoSaveChanged: if (canAutoSave) autoSaveTimer.restart()
+
+  Component.onDestruction: {
+    if (!autoSave || autoSavePaused || !dirty || !writable || !service || textArea.length !== textArea.model.length) return
+    service.writeText(path, textArea.model, identity, false, crlf, bom, null, null)
   }
 
   function finishClose() {
@@ -239,6 +266,12 @@ Rectangle {
   }
 
   Timer {
+    id: autoSaveTimer
+    interval: view.autoSaveDelay
+    onTriggered: if (view.canAutoSave) view.save(false)
+  }
+
+  Timer {
     id: noticeTimer
     interval: 4000
     onTriggered: if (!view.saving) view.notice = ""
@@ -325,6 +358,17 @@ Rectangle {
           bordered: true
           onClicked: {
             view.wrap = !view.wrap
+            view.focusEditor()
+          }
+        }
+
+        Button {
+          objectName: "textEditorAutoSave"
+          text: view.autoSave ? "Auto save on" : "Auto save off"
+          bordered: true
+          selected: view.autoSave
+          onClicked: {
+            view.setAutoSave(!view.autoSave)
             view.focusEditor()
           }
         }
@@ -446,6 +490,7 @@ Rectangle {
           property int historyDepth: 0
           property int savedDepth: 0
           property int revision: 0
+          onRevisionChanged: if (view.canAutoSave) autoSaveTimer.restart()
           property string indentUnit: "    "
           property bool locked: !view.writable
           property var clipboardSource: view.service
@@ -595,11 +640,14 @@ Rectangle {
             spacing: Style.space(8)
 
             Button {
+              objectName: "textEditorCancel"
               text: "Cancel"
               bordered: true
               onClicked: {
+                var conflict = view.prompt === "conflict"
                 view.prompt = ""
                 view.closeAfterSave = false
+                if (conflict && view.autoSave) view.say("Auto save is paused until you save", false)
                 view.focusEditor()
               }
             }

@@ -4869,6 +4869,8 @@ Item {
         description: "Show images, video frames and document pages instead of a generic icon" },
       { key: "rememberFolderViews", label: "Remember the view for each folder",
         description: "A folder opens in the view you last picked there. Other folders open in the default view" },
+      { key: "editorAutoSave", label: "Save edited text automatically", fallback: false,
+        description: "The text editor saves a second after you stop typing and when it closes. Apps that reload their config on save, like Hyprland, then apply each change as you type" },
       { key: "extractOnOpen", label: "Extract archives when opened", fallback: false,
         description: "Double click or Enter extracts zip, tar, 7z and rar files next to themselves instead of opening them in your default app" }
     ]

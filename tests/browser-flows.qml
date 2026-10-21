@@ -1915,6 +1915,76 @@ ShellRoot {
         mock.textFiles = ({})
       }
 
+      function test_9kc_editorAutoSave() {
+        waitRows()
+        function writes() { return mock.calls.filter(function (c) { return c.name === "writeText" }) }
+        var view = editorView()
+        var area = editorText()
+        compare(view.autoSave, false, "auto save is off by default")
+        mock.updateSetting("editorAutoSave", true)
+        view.autoSaveDelay = 200
+        mock.textFiles = { "/tmp/auto.txt": { text: "one\n" } }
+        mock.calls = []
+        browser.editText(Model.decodeEntry(["auto.txt", "f", 4, 100, 420, null], "/tmp"))
+        tryCompare(view, "loading", false)
+        tryCompare(area, "activeFocus", true)
+        compare(findChild(browser, "textEditorAutoSave").text, "Auto save on")
+        keyClick(Qt.Key_End, Qt.ControlModifier)
+        keyClick(Qt.Key_A)
+        compare(writes().length, 0, "nothing is saved while you type")
+        tryVerify(function () { return writes().length === 1 }, 3000)
+        compare(writes()[0].args[1], "one\na")
+        tryCompare(view, "dirty", false)
+        keyClick(Qt.Key_B); keyClick(Qt.Key_C); keyClick(Qt.Key_D)
+        tryVerify(function () { return writes().length === 2 }, 3000)
+        wait(400)
+        compare(writes().length, 2, "a burst of typing is saved once")
+        compare(writes()[1].args[1], "one\nabcd")
+
+        mock.writeResult = { code: "ECONFLICT", message: "changed" }
+        keyClick(Qt.Key_E)
+        tryCompare(view, "prompt", "conflict")
+        waitForRendering(browser)
+        mouseClick(findChild(browser, "textEditorCancel"))
+        verify(view.autoSavePaused)
+        compare(view.notice, "Auto save is paused until you save")
+        var before = writes().length
+        keyClick(Qt.Key_F)
+        wait(600)
+        compare(writes().length, before, "after a conflict it stops saving on its own")
+        compare(view.prompt, "", "and does not keep asking")
+        mock.writeResult = null
+        keyClick(Qt.Key_S, Qt.ControlModifier)
+        tryVerify(function () { return writes().length === before + 1 })
+        verify(writes()[before].args[3] === false)
+        tryCompare(view, "autoSavePaused", false, 3000, "saving by hand turns auto save back on")
+
+        keyClick(Qt.Key_G)
+        keyClick(Qt.Key_Escape)
+        compare(view.prompt, "", "closing saves instead of asking")
+        tryCompare(view, "open", false)
+        compare(writes()[writes().length - 1].args[1].slice(-1), "g", "the last keystroke is saved")
+
+        browser.editText(Model.decodeEntry(["auto.txt", "f", 4, 100, 420, null], "/tmp"))
+        tryCompare(view, "loading", false)
+        waitForRendering(browser)
+        mouseClick(findChild(browser, "textEditorAutoSave"))
+        compare(view.autoSave, false)
+        compare(mock.settingNow("editorAutoSave", true), false, "the toggle is saved as a setting")
+        tryCompare(area, "activeFocus", true)
+        keyClick(Qt.Key_H)
+        wait(500)
+        var settled = writes().length
+        keyClick(Qt.Key_Escape)
+        compare(view.prompt, "unsaved", "with auto save off, closing asks again")
+        compare(writes().length, settled)
+        waitForRendering(browser)
+        mouseClick(findChild(browser, "textEditorDiscard"))
+        compare(view.open, false)
+        view.autoSaveDelay = 1000
+        mock.textFiles = ({})
+      }
+
       function test_9kb_duplicates() {
         waitRows()
         var alpha = Model.decodeEntry(["alpha.yml", "f", 30, 300, 420, null], "/tmp")

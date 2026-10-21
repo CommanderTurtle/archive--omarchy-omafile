@@ -35,6 +35,7 @@
       "defaultView": "list",
       "rememberFolderViews": true,
       "extractOnOpen": false,
+      "editorAutoSave": false,
       "dropAction": "auto",
       "viewScale": 1,
       "terminal": "",
@@ -118,6 +119,12 @@
         "type": "boolean",
         "label": "Remember the view for each folder",
         "defaultValue": true
+      },
+      {
+        "key": "editorAutoSave",
+        "type": "boolean",
+        "label": "Text editor saves automatically",
+        "defaultValue": false
       },
       {
         "key": "extractOnOpen",

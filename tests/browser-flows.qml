@@ -483,6 +483,65 @@ ShellRoot {
         mock.statItems = ({})
       }
 
+      function test_3ha_liveUpdatesKeepRows() {
+        waitRows()
+        browser.setView("list")
+        pane().setSortOrder("name", false)
+        var list = findChild(pane(), "fileList")
+        verify(list !== null, "file list")
+        var before = []
+        for (var i = 0; i < 3; i++) before.push(list.itemAtIndex(i))
+        var at = names().indexOf("alpha.yml")
+        wait(1100)
+        mock.statItems = { "/tmp/alpha.yml": { kind: "f", size: 777, mtime: 700, mode: 420, linkTarget: null } }
+        mock.watchCallback({ names: ["alpha.yml"] })
+        tryVerify(function () { return pane().rows[at][2] === 777 }, 2500, "size updates")
+        for (var j = 0; j < 3; j++) verify(list.itemAtIndex(j) === before[j], "row " + j + " keeps its delegate")
+        compare(list.itemAtIndex(at).entry.size, 777)
+
+        wait(1100)
+        mock.statItems = { "/tmp/new.txt": { kind: "f", size: 5, mtime: 600, mode: 420, linkTarget: null } }
+        mock.watchCallback({ names: ["new.txt"] })
+        tryVerify(function () { return names().indexOf("new.txt") >= 0 }, 2500, "new file appears")
+        for (var k = 0; k < 3; k++) {
+          var name = before[k].entry.name
+          verify(list.itemAtIndex(names().indexOf(name)) === before[k], name + " keeps its delegate")
+        }
+
+        mock.statItems = ({})
+        wait(1100)
+        mock.watchCallback({ names: [] })
+        waitRows()
+      }
+
+      function test_3hb_filterResetKeepsScrolling() {
+        waitRows()
+        browser.setView("list")
+        var saved = mock.files
+        var many = []
+        for (var i = 0; i < 400; i++) many.push(["file-" + (1000 + i) + ".txt", "f", i, i, 420, null])
+        mock.files = many
+        pane().refresh()
+        tryVerify(function () { return pane().rows.length === 400 }, 5000)
+        var list = findChild(pane(), "fileList")
+        wait(300)
+        list.contentY = 3000
+        tryVerify(function () { return list.contentY > 2000 }, 2000, "the list scrolls down")
+        wait(100)
+        pane().filter = "file-11"
+        tryVerify(function () { return pane().rows.length === 100 }, 2000)
+        pane().filter = ""
+        tryVerify(function () { return pane().rows.length === 400 }, 2000)
+        wait(100)
+        compare(list.originY, 0, "replacing every row starts the list afresh")
+        list.positionViewAtBeginning()
+        wait(100)
+        compare(list.indexAt(10, list.contentY + 5), 0, "the first row shows at the top")
+        mock.files = saved
+        pane().refresh()
+        waitRows()
+      }
+
       function beginPick() {
         browser.beginPickSession()
         tryCompare(browser, "pickInputHeld", false)

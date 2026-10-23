@@ -24,10 +24,7 @@ TextField {
 
   Keys.onPressed: function (event) {
     if (field.keyFilter && field.keyFilter(event)) event.accepted = true
-    else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-      event.accepted = true
-      field.accepted()
-    } else if (TextEditing.handleKey(field, event, field.editKeys)) event.accepted = true
+    else if (TextEditing.handleKey(field, event, field.editKeys)) event.accepted = true
   }
 
   Rectangle {

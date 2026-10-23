@@ -90,7 +90,6 @@ var actionGlyphs = {
   menu: '',
   eject: '',
   lock: '󰌾',
-  transcode: '󰓡',
   open: '',
   terminal: '',
   editor: '',

@@ -763,8 +763,7 @@ test('previewKind only previews regular files and links to them', function () {
   assert.equal(Model.previewKind(Model.decodeEntry(['pic.png', 'o', 0, 0, 0, '/dev/zero'], '/tmp')), 'none');
   assert.equal(Model.previewKind(Model.decodeEntry(['notes.txt', 'o', 0, 0, 0, null], '/tmp')), 'none');
   assert.equal(Model.previewKind(Model.decodeEntry(['song.mp3', 'l', 10, 0, 0, '/music/a.mp3'], '/tmp')), 'audio');
-  assert.equal(Model.previewKind(Model.decodeEntry(['big8k.png', 'f', 170 * 1024 * 1024, 0, 0, null], '/tmp')), 'image', 'an 8K PNG is previewed');
-  assert.equal(Model.previewKind(Model.decodeEntry(['huge.png', 'f', 1024 * 1024 * 1024 + 1, 0, 0, null], '/tmp')), 'none');
+  assert.equal(Model.previewKind(Model.decodeEntry(['huge.png', 'f', 65 * 1024 * 1024, 0, 0, null], '/tmp')), 'image');
 });
 
 test('glob matching stays fast on hostile patterns', function () {
@@ -786,110 +785,6 @@ test('expandFieldCodes quotes the path inside a shell script argument', function
   assert.deepEqual(expand(['/usr/bin/env', 'bash', '-c', 'cat %f'], '/tmp/$(id)'),
     ['/usr/bin/env', 'bash', '-c', "cat '/tmp/$(id)'"]);
   assert.deepEqual(expand(['app', '-c', 'x %f'], '/tmp/a b'), ['app', '-c', 'x /tmp/a b']);
-});
-
-test('commandProgram gives the program a command starts, so it can be looked up', function () {
-  assert.equal(Model.commandProgram('code --new-window'), 'code');
-  assert.equal(Model.commandProgram('~/bin/omp --resume'), '~/bin/omp');
-  assert.equal(Model.commandProgram('FOO=1 nvim'), 'nvim');
-  assert.equal(Model.commandProgram('-e nano'), '-e', 'a broken setting names no real program');
-  assert.equal(Model.commandProgram(''), '');
-});
-
-test('editorInTerminal spots editors that need a terminal, by the program they run', function () {
-  assert.equal(Model.editorInTerminal('nano'), true);
-  assert.equal(Model.editorInTerminal('/usr/bin/nvim -p'), true);
-  assert.equal(Model.editorInTerminal('code'), false);
-  assert.equal(Model.editorInTerminal('alacritty -e nvim'), false, 'a command that opens its own terminal runs as is');
-  assert.equal(Model.editorName('zeditor'), 'Zed');
-  assert.equal(Model.editorName('kate'), 'kate');
-  assert.equal(Model.knownEditor('nano').omarchy, false, 'Omarchy cannot make nano its default');
-});
-
-function plain(value) { return JSON.parse(JSON.stringify(value)); }
-
-test('agentChoice uses your own agent, then Omarchy\'s default, then Claude Code', function () {
-  assert.deepEqual(plain(Model.agentChoice('omp --resume', 'claude', true, true)), { command: 'omp --resume', name: 'omp', source: 'own' });
-  assert.deepEqual(plain(Model.agentChoice('', 'omp', true, true)), { command: 'omp', name: 'Oh My Pi', source: 'omarchy' });
-  assert.deepEqual(plain(Model.agentChoice('', 'omp', false, true)), { command: 'claude', name: 'Claude Code', source: 'claude' },
-    'an Omarchy default that is not installed is skipped');
-  assert.deepEqual(plain(Model.agentChoice('  ', '', false, false)), { command: '', name: '', source: '' });
-  assert.equal(Model.agentChoice('', 'newagent', true, false).name, 'newagent');
-});
-
-test('textEditable offers the editor for text files up to 1 MB and nothing else', function () {
-  function entry(name, size, kind) { return Model.decodeEntry([name, kind || 'f', size === undefined ? 100 : size, 0, 420, null], '/tmp'); }
-  assert.equal(Model.textEditable(entry('notes.txt')), true);
-  assert.equal(Model.textEditable(entry('Makefile')), true, 'a file with no extension may be text');
-  assert.equal(Model.textEditable(entry('.bashrc')), true);
-  assert.equal(Model.textEditable(entry('script.py', 1024 * 1024)), true);
-  assert.equal(Model.textEditable(entry('huge.log', 1024 * 1024 + 1)), false);
-  assert.equal(Model.textEditable(entry('photo.png')), false);
-  assert.equal(Model.textEditable(entry('report.pdf')), false);
-  assert.equal(Model.textEditable(entry('letter.docx')), false);
-  assert.equal(Model.textEditable(entry('pack.zip')), false);
-  assert.equal(Model.textEditable(entry('docs', 0, 'd')), false);
-  assert.equal(Model.textEditable(entry('gone.txt', 0, 'b')), false);
-  assert.equal(Model.textEditable(entry('fifo.txt', 0, 'o')), false);
-});
-
-test('previewSide matches the screen when automatic and stops at 4096', function () {
-  assert.equal(Model.previewSide('auto', 900), 1024, 'a 1080p screen keeps the standard preview');
-  assert.equal(Model.previewSide('auto', 1024), 1024);
-  assert.equal(Model.previewSide('auto', 1800), 2048);
-  assert.equal(Model.previewSide('auto', 3192), 4096, 'a 4K screen gets a 4096 px preview');
-  assert.equal(Model.previewSide('auto', 7000), 4096, 'automatic never makes 8K previews on its own');
-  assert.equal(Model.previewSide('auto', 0), 1024);
-  assert.equal(Model.previewSide(undefined, 3000), 4096);
-});
-
-test('previewSide uses a fixed choice as is and ignores anything else', function () {
-  assert.equal(Model.previewSide('1024', 4000), 1024);
-  assert.equal(Model.previewSide('2048', 500), 2048);
-  assert.equal(Model.previewSide('7680', 500), 7680);
-  assert.equal(Model.previewSide('100000', 500), 1024, 'an unknown size falls back to automatic');
-});
-
-test('transcodeKind sorts pictures and videos by extension and skips everything else', function () {
-  assert.equal(Model.transcodeKind({ name: 'IMG_1.HEIC' }), 'picture');
-  assert.equal(Model.transcodeKind({ name: 'shot.png' }), 'picture');
-  assert.equal(Model.transcodeKind({ name: 'scan.JXL' }), 'picture');
-  assert.equal(Model.transcodeKind({ name: 'clip.MOV' }), 'video');
-  assert.equal(Model.transcodeKind({ name: 'drawing.svg' }), '', 'vector images are never transcoded');
-  assert.equal(Model.transcodeKind({ name: 'notes.txt' }), '');
-  assert.equal(Model.transcodeKind({ name: 'photos.png', isDir: true }), '');
-  assert.equal(Model.transcodeKind({ name: 'gone.mp4', isBroken: true }), '');
-  assert.equal(Model.transcodeKind(null), '');
-});
-
-function expandMulti(command, paths) {
-  return Array.prototype.slice.call(Model.expandFieldCodesMulti(command, paths)).map(function (argv) {
-    return Array.prototype.slice.call(argv);
-  });
-}
-
-test('expandFieldCodesMulti launches a file list app once with every file', function () {
-  assert.deepEqual(expandMulti(['imv', '%F'], ['/a.png', '/b.png']), [['imv', '/a.png', '/b.png']]);
-  assert.deepEqual(expandMulti(['viewer', '--new', '%U', '--end'], ['/a', '/b']), [['viewer', '--new', '/a', '/b', '--end']]);
-  assert.deepEqual(expandMulti(['app', '%F', '%%'], ['/a', '/b']), [['app', '/a', '/b', '%']]);
-});
-
-test('expandFieldCodesMulti launches a single file app once per file', function () {
-  assert.deepEqual(expandMulti(['mpv', '%f'], ['/a.mp3', '/b.mp3']), [['mpv', '/a.mp3'], ['mpv', '/b.mp3']]);
-  assert.deepEqual(expandMulti(['app'], ['/a', '/b']), [['app', '/a'], ['app', '/b']]);
-  assert.deepEqual(expandMulti(['app', '%F', '%f'], ['/a', '/b']), [['app', '/a', '/a'], ['app', '/b', '/b']]);
-  assert.deepEqual(expandMulti(['app', '--files=%F'], ['/a', '/b']), [['app', '--files=/a'], ['app', '--files=/b']]);
-});
-
-test('expandFieldCodesMulti quotes every file inside a shell script argument', function () {
-  assert.deepEqual(expandMulti(['sh', '-c', 'feh %F'], ["/tmp/a'b", '/tmp/$(id)']),
-    [['sh', '-c', "feh '/tmp/a'\\''b' '/tmp/$(id)'"]]);
-});
-
-test('expandFieldCodesMulti matches expandFieldCodes for one file and does nothing for none', function () {
-  assert.deepEqual(expandMulti(['imv', '%F'], ['/a.png']), [['imv', '/a.png']]);
-  assert.deepEqual(expandMulti(['imv', '%F'], []), []);
-  assert.deepEqual(expandMulti([], ['/a', '/b']), []);
 });
 
 test('isWithin matches a folder and what is inside it, never a sibling with the same prefix', function () {

@@ -77,62 +77,6 @@ test('cut never copies a password', function () {
   assert.equal(f.text, 'secret');
 });
 
-test('a password keeps no undo history in any hidden echo mode', function () {
-  [1, 2, 3].forEach(function (mode) {
-    var pending = [];
-    var f = field('ab', 2);
-    f.echoMode = mode;
-    f.clipboardSource = { readClipboardText: function (cb) { pending.push(cb); } };
-    press(f, 0, 0, 'c');
-    press(f, keys.Key_Backspace);
-    press(f, keys.Key_Backspace, keys.ControlModifier);
-    press(f, keys.Key_V, keys.ControlModifier);
-    pending.shift()('XY');
-    f.cursorPosition = f.selectionStart = f.selectionEnd = 0;
-    press(f, keys.Key_Delete);
-    press(f, keys.Key_Delete, keys.ControlModifier);
-    assert.equal(f.text, '', 'mode ' + mode + ' still edits');
-    f.text = 'secret';
-    f.selectionStart = 0;
-    f.selectionEnd = 6;
-    press(f, keys.Key_Delete, keys.ShiftModifier);
-    assert.equal(f.text, '');
-    assert.equal(f.copied, null);
-    assert.deepEqual(f.editUndo, [], 'mode ' + mode + ' records nothing to undo');
-    assert.deepEqual(f.editRedo, []);
-  });
-});
-
-test('undo and redo never bring a password back and still swallow the keys', function () {
-  var f = field('secret', 6);
-  f.echoMode = 2;
-  f.editUndo = [{ text: 'sec', cursor: 3 }];
-  f.editRedo = [{ text: 'secret!', cursor: 7 }];
-  assert.equal(press(f, keys.Key_Z, keys.ControlModifier), true);
-  assert.equal(f.text, 'secret');
-  assert.equal(press(f, keys.Key_Y, keys.ControlModifier), true);
-  assert.equal(press(f, keys.Key_Z, keys.ControlModifier | keys.ShiftModifier), true);
-  assert.equal(f.text, 'secret');
-  assert.equal(f.editUndo.length, 1);
-  assert.equal(f.editRedo.length, 1);
-});
-
-test('a normal field records every kind of edit', function () {
-  var pending = [];
-  var f = field('ab', 2);
-  f.clipboardSource = { readClipboardText: function (cb) { pending.push(cb); } };
-  press(f, 0, 0, 'c');
-  press(f, keys.Key_Backspace);
-  press(f, keys.Key_V, keys.ControlModifier);
-  pending.shift()('XY');
-  f.cursorPosition = f.selectionStart = f.selectionEnd = 0;
-  press(f, keys.Key_Delete);
-  assert.equal(f.text, 'bXY');
-  assert.deepEqual(f.editUndo.map(function (s) { return s.text; }), ['ab', 'abc', 'ab', 'abXY']);
-  press(f, keys.Key_Z, keys.ControlModifier);
-  assert.equal(f.text, 'abXY');
-});
-
 test('paste reads through the clipboard source and ignores late answers', function () {
   var pending = [];
   var source = { readClipboardText: function (cb) { pending.push(cb); } };

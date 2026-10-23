@@ -1,6 +1,6 @@
 var monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-var imageExtSet = toSet(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico', 'tiff', 'tif', 'heic', 'avif', 'jxl']);
+var imageExtSet = toSet(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico', 'tiff', 'tif', 'heic', 'avif']);
 var videoExtSet = toSet(['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'wmv', 'm4v', 'mpg', 'mpeg']);
 var audioExtSet = toSet(['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac', 'wma', 'opus']);
 var archiveExtSet = toSet(['zip', 'tar', 'gz', 'bz2', 'xz', '7z', 'rar', 'zst', 'tgz']);
@@ -10,7 +10,7 @@ var fontExtSet = toSet(['ttf', 'otf', 'woff', 'woff2']);
 
 var extLabels = {
   png: 'PNG image', jpg: 'JPEG image', jpeg: 'JPEG image', gif: 'GIF image', bmp: 'Bitmap image',
-  webp: 'WebP image', jxl: 'JPEG XL image', svg: 'SVG image', ico: 'Icon image', tiff: 'TIFF image', tif: 'TIFF image',
+  webp: 'WebP image', svg: 'SVG image', ico: 'Icon image', tiff: 'TIFF image', tif: 'TIFF image',
   heic: 'HEIC image', avif: 'AVIF image',
   mp4: 'MP4 video', mkv: 'Matroska video', avi: 'AVI video', mov: 'QuickTime video', webm: 'WebM video',
   flv: 'Flash video', wmv: 'WMV video', m4v: 'MPEG-4 video', mpg: 'MPEG video', mpeg: 'MPEG video',
@@ -341,43 +341,6 @@ function isArchive(entry) {
   for (var i = 0; i < extractSuffixes.length; i++)
     if (lower.length > extractSuffixes[i].length && lower.slice(-extractSuffixes[i].length) === extractSuffixes[i]) return true;
   return false;
-}
-
-var editLimit = 1024 * 1024;
-var notTextExtSet = toSet(['pdf', 'doc', 'docx', 'odt', 'ods', 'odp', 'xls', 'xlsx', 'ppt', 'pptx', 'epub',
-  'iso', 'img', 'dmg', 'exe', 'dll', 'so', 'o', 'a', 'bin', 'dat', 'db', 'sqlite', 'sqlite3', 'class', 'jar',
-  'pyc', 'deb', 'rpm', 'apk', 'msi', 'psd', 'xcf', 'blend', 'kra', 'ai', 'mobi', 'qcow2', 'vdi', 'wasm']);
-
-function textEditable(entry) {
-  if (!entry || entry.isDir || entry.isBroken) return false;
-  if (entry.kind !== undefined && entry.kind !== 'f' && entry.kind !== 'l') return false;
-  if ((Number(entry.size) || 0) > editLimit) return false;
-  var ext = String(entry.ext || '').toLowerCase();
-  return !imageExtSet[ext] && !videoExtSet[ext] && !audioExtSet[ext] && !archiveExtSet[ext]
-    && !fontExtSet[ext] && !notTextExtSet[ext];
-}
-
-var previewSides = [1024, 2048, 4096, 7680];
-var autoPreviewMax = 4096;
-
-function previewSide(choice, screenPixels) {
-  var fixed = Number(choice);
-  if (previewSides.indexOf(fixed) >= 0) return fixed;
-  var need = Number(screenPixels) || 0;
-  for (var i = 0; i < previewSides.length; i++)
-    if (previewSides[i] >= need || previewSides[i] >= autoPreviewMax) return previewSides[i];
-  return autoPreviewMax;
-}
-
-var transcodePictureExts = toSet(['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif', 'avif', 'jxl', 'bmp', 'tif', 'tiff']);
-var transcodeVideoExts = toSet(['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', 'mpg', 'mpeg', 'ts', 'flv']);
-
-function transcodeKind(entry) {
-  if (!entry || entry.isDir || entry.isBroken) return '';
-  var ext = extOf(String(entry.name || ''));
-  if (transcodePictureExts[ext]) return 'picture';
-  if (transcodeVideoExts[ext]) return 'video';
-  return '';
 }
 
 function parentPath(path) {
@@ -755,65 +718,61 @@ function expandFieldCodes(command, path) {
   return out;
 }
 
-function takesFileList(command) {
-  var list = false;
+function expandFieldCodesMulti(command, paths) {
+  var list = paths && paths.length ? paths : [undefined];
+  var out = [];
+  var used = false;
   var length = command && command.length ? command.length : 0;
   for (var i = 0; i < length; i++) {
     var arg = String(command[i]);
-    for (var j = 0; j < arg.length; j++) {
-      if (arg.charAt(j) !== '%') continue;
-      var code = arg.charAt(j + 1);
-      j++;
-      if (code === 'f' || code === 'u') return false;
-      if (code !== 'F' && code !== 'U') continue;
-      if (arg !== '%' + code && !isShellScriptArg(command, i)) return false;
-      list = true;
-    }
-  }
-  return list;
-}
-
-function expandFieldCodesMulti(command, paths) {
-  var targets = [];
-  var count = paths && paths.length ? paths.length : 0;
-  for (var p = 0; p < count; p++) targets.push(String(paths[p]));
-  if (targets.length === 0) return [];
-  if (targets.length === 1 || !takesFileList(command)) {
-    var each = [];
-    for (var t = 0; t < targets.length; t++) {
-      var single = expandFieldCodes(command, targets[t]);
-      if (single.length > 0) each.push(single);
-    }
-    return each;
-  }
-  var quoted = targets.map(shellQuote).join(' ');
-  var out = [];
-  for (var i = 0; i < command.length; i++) {
-    var arg = String(command[i]);
     var inScript = isShellScriptArg(command, i);
-    if (!inScript && (arg === '%F' || arg === '%U')) {
-      out = out.concat(targets);
-      continue;
-    }
-    var built = '';
+    var prefix = '';
+    var suffix = '';
+    var sawCode = false;
     for (var j = 0; j < arg.length; j++) {
       var ch = arg.charAt(j);
       if (ch !== '%') {
-        built += ch;
+        if (sawCode) suffix += ch; else prefix += ch;
         continue;
       }
       var code = arg.charAt(j + 1);
       if (code === '') {
-        built += '%';
+        if (sawCode) suffix += '%'; else prefix += '%';
         continue;
       }
       j++;
-      if (code === '%') built += '%';
-      else if (code === 'F' || code === 'U') built += quoted;
+      if (code === '%') {
+        if (sawCode) suffix += '%'; else prefix += '%';
+        continue;
+      }
+      if (code === 'f' || code === 'F' || code === 'u' || code === 'U') {
+        sawCode = true;
+        used = true;
+      }
     }
-    if (built !== '') out.push(built);
+    if (sawCode) {
+      var parts = [];
+      for (var m = 0; m < list.length; m++)
+        parts.push(list[m] === undefined || list[m] === null ? '' : String(list[m]));
+      if (inScript) {
+        var quoted = [];
+        for (var q = 0; q < parts.length; q++) quoted.push(shellQuote(parts[q]));
+        out.push(prefix + quoted.join(' ') + suffix);
+      } else {
+        if (prefix !== '') out.push(prefix);
+        for (var p = 0; p < parts.length; p++) out.push(parts[p]);
+        if (suffix !== '') out.push(suffix);
+      }
+    } else if (prefix !== '') {
+      out.push(prefix);
+    }
   }
-  return out.length > 0 ? [out] : [];
+  if (out.length === 0) return [];
+  if (!used) {
+    for (var n = 0; n < list.length; n++)
+      out.push(list[n] === undefined || list[n] === null ? '' : String(list[n]));
+  }
+  return out;
 }
 
 function tokenizeCommand(text) {
@@ -869,60 +828,13 @@ function tokenizeCommand(text) {
 
 var envAssignment = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
-function commandProgram(text) {
+function commandName(text) {
   var words = tokenizeCommand(text);
   for (var i = 0; i < words.length; i++) {
     if (envAssignment.test(words[i])) continue;
-    return words[i];
+    return basename(words[i]);
   }
   return '';
-}
-
-function commandName(text) {
-  return basename(commandProgram(text));
-}
-
-var knownEditors = [
-  { id: 'code', name: 'VS Code', omarchy: true, terminal: false },
-  { id: 'cursor', name: 'Cursor', omarchy: true, terminal: false },
-  { id: 'zeditor', name: 'Zed', omarchy: true, terminal: false },
-  { id: 'sublime_text', name: 'Sublime Text', omarchy: true, terminal: false },
-  { id: 'emacs', name: 'Emacs', omarchy: true, terminal: false },
-  { id: 'nvim', name: 'Neovim', omarchy: true, terminal: true },
-  { id: 'vim', name: 'Vim', omarchy: true, terminal: true },
-  { id: 'helix', name: 'Helix', omarchy: true, terminal: true },
-  { id: 'nano', name: 'nano', omarchy: false, terminal: true },
-  { id: 'micro', name: 'micro', omarchy: false, terminal: true }
-];
-var terminalEditors = toSet(['nvim', 'vim', 'vi', 'nano', 'micro', 'hx', 'helix', 'fresh', 'kak', 'emacsclient-nw']);
-
-function knownEditor(id) {
-  for (var i = 0; i < knownEditors.length; i++) if (knownEditors[i].id === id) return knownEditors[i];
-  return null;
-}
-
-function editorName(id) {
-  var known = knownEditor(String(id || ''));
-  return known ? known.name : String(id || '');
-}
-
-function editorInTerminal(command) {
-  return terminalEditors[commandName(command)] === true;
-}
-
-var omarchyAgentNames = {
-  pi: 'Pi', omp: 'Oh My Pi', opencode: 'OpenCode', claude: 'Claude Code', codex: 'Codex', crush: 'Crush',
-  grok: 'Grok', gemini: 'Gemini', openclaw: 'OpenClaw', hermes: 'Hermes', copilot: 'GitHub Copilot',
-  'cursor-agent': 'Cursor CLI', muse: 'Muse Code'
-};
-
-function agentChoice(setting, omarchyAgent, omarchyFound, claudeFound) {
-  var own = String(setting || '').trim();
-  if (own) return { command: own, name: commandName(own) || own, source: 'own' };
-  var picked = String(omarchyAgent || '');
-  if (picked && omarchyFound) return { command: picked, name: omarchyAgentNames[picked] || picked, source: 'omarchy' };
-  if (claudeFound) return { command: 'claude', name: 'Claude Code', source: 'claude' };
-  return { command: '', name: '', source: '' };
 }
 
 var globLimit = 64;
@@ -1082,7 +994,17 @@ function isImageName(name) {
   return !!imageExtSet[extOf(String(name || ''))];
 }
 
-var imagePreviewLimit = 1024 * 1024 * 1024;
+var previewSides = [1024, 2048, 4096, 7680, 8192];
+var autoPreviewMax = 4096;
+
+function previewSide(choice, screenPixels) {
+  var fixed = Number(choice);
+  if (previewSides.indexOf(fixed) >= 0) return fixed;
+  var need = Number(screenPixels) || 0;
+  for (var i = 0; i < previewSides.length; i++)
+    if (previewSides[i] >= need || previewSides[i] >= autoPreviewMax) return previewSides[i];
+  return autoPreviewMax;
+}
 
 function previewKind(entry) {
   if (!entry) return 'none';
@@ -1090,7 +1012,7 @@ function previewKind(entry) {
   if (entry.isBroken) return 'none';
   if (entry.kind !== 'f' && entry.kind !== 'l') return 'none';
   var ext = String(entry.ext || '').toLowerCase();
-  if (imageExtSet[ext]) return (Number(entry.size) || 0) > imagePreviewLimit ? 'none' : 'image';
+  if (imageExtSet[ext]) return 'image';
   if (audioExtSet[ext]) return 'audio';
   return 'text';
 }

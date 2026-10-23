@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "xyzlab.omafile",
   "name": "Omafile",
-  "version": "1.4.9",
+  "version": "1.4.4",
   "author": "xyzlab",
   "license": "MIT",
   "description": "A file manager for Omarchy. Opens as a real window with tabs and dual panes, watches directories live, copies and moves in the background with progress, and puts places, drives, transfers and trash in the bar.",
@@ -35,18 +35,15 @@
       "defaultView": "list",
       "rememberFolderViews": true,
       "extractOnOpen": false,
-      "editorAutoSave": false,
       "dropAction": "auto",
       "viewScale": 1,
       "terminal": "",
       "editor": "",
-      "editorChoice": "",
       "agent": "",
       "showTransferBadge": true,
       "glyph": "",
       "showDrives": true,
       "thumbnails": true,
-      "previewSize": "auto",
       "gridCaption1": "none",
       "gridCaption2": "none",
       "gridCaption3": "none",
@@ -122,12 +119,6 @@
         "defaultValue": true
       },
       {
-        "key": "editorAutoSave",
-        "type": "boolean",
-        "label": "Text editor saves automatically",
-        "defaultValue": false
-      },
-      {
         "key": "extractOnOpen",
         "type": "boolean",
         "label": "Extract archives when opened",
@@ -148,19 +139,13 @@
       {
         "key": "editor",
         "type": "string",
-        "label": "Editor command, used when the editor choice is own",
-        "defaultValue": ""
-      },
-      {
-        "key": "editorChoice",
-        "type": "string",
-        "label": "Editor: empty to ask the first time, omarchy, omafile or own",
+        "label": "Editor command (empty for Omarchy default)",
         "defaultValue": ""
       },
       {
         "key": "agent",
         "type": "string",
-        "label": "Agent command run in a terminal (empty for the Omarchy default agent, then Claude Code)",
+        "label": "Agent command run in a terminal (empty for Claude Code)",
         "defaultValue": ""
       },
       {
@@ -186,12 +171,6 @@
         "type": "boolean",
         "label": "Show image previews and thumbnails for videos and documents",
         "defaultValue": true
-      },
-      {
-        "key": "previewSize",
-        "type": "string",
-        "label": "Image preview size: auto, 1024, 2048, 4096 or 7680",
-        "defaultValue": "auto"
       },
       {
         "key": "gridCaption1",

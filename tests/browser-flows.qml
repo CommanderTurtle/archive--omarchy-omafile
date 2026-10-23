@@ -50,7 +50,7 @@ ShellRoot {
         mouseDoubleClickSequence(list.itemAtIndex(0))
         var call = mock.called("openWith")
         verify(call !== null, "openWith called by click")
-        compare(call.args[1], ["/tmp/alpha.yml"])
+        compare(call.args[1], "/tmp/alpha.yml")
         compare(browser.dialogMode, "")
       }
 
@@ -78,7 +78,7 @@ ShellRoot {
         mouseClick(button)
         var call = mock.called("openWith")
         verify(call !== null, "Open button launches")
-        compare(call.args[1], ["/tmp/alpha.yml"])
+        compare(call.args[1], "/tmp/alpha.yml")
         compare(mock.called("setDefaultApp"), null, "no default without the toggle")
         compare(browser.dialogMode, "")
       }
@@ -145,28 +145,6 @@ ShellRoot {
         mouseClick(findChild(browser, "dialogConfirmButton"))
         verify(mock.called("openWith") !== null, "folder still opens with the app")
         compare(mock.called("setDefaultApp"), null, "folders never get a default")
-      }
-
-      function test_1h_enterInOpenWithLaunchesOnce() {
-        openWithDialogFor(0)
-        var field = findChild(browser, "appField")
-        tryCompare(field, "activeFocus", true)
-        keyClick(Qt.Key_E)
-        verify(browser.filteredApps().length > 0)
-        keyClick(Qt.Key_Return)
-        compare(browser.dialogMode, "")
-        compare(count("openWith"), 1, "Enter launches the chosen app once")
-        compare(mock.called("openExternally"), null, "and never opens the file in the default app too")
-
-        openWithDialogFor(0)
-        tryCompare(field, "activeFocus", true)
-        keyClick(Qt.Key_Z)
-        keyClick(Qt.Key_Q)
-        keyClick(Qt.Key_Q)
-        browser.appCursor = -1
-        keyClick(Qt.Key_Return)
-        compare(count("runCommandOn"), 1, "Enter runs a typed command once")
-        compare(mock.called("openExternally"), null)
       }
 
       function test_2_sortMenu() {
@@ -483,70 +461,6 @@ ShellRoot {
         mock.statItems = ({})
       }
 
-      function test_3ha_liveUpdatesKeepRows() {
-        waitRows()
-        browser.setView("list")
-        pane().setSortOrder("name", false)
-        var list = findChild(pane(), "fileList")
-        verify(list !== null, "file list")
-        var before = []
-        for (var i = 0; i < 3; i++) before.push(list.itemAtIndex(i))
-        var at = names().indexOf("alpha.yml")
-        wait(1100)
-        mock.statItems = { "/tmp/alpha.yml": { kind: "f", size: 777, mtime: 700, mode: 420, linkTarget: null } }
-        mock.watchCallback({ names: ["alpha.yml"] })
-        tryVerify(function () { return pane().rows[at][2] === 777 }, 2500, "size updates")
-        for (var j = 0; j < 3; j++) verify(list.itemAtIndex(j) === before[j], "row " + j + " keeps its delegate")
-        compare(list.itemAtIndex(at).entry.size, 777)
-
-        wait(1100)
-        mock.statItems = { "/tmp/new.txt": { kind: "f", size: 5, mtime: 600, mode: 420, linkTarget: null } }
-        mock.watchCallback({ names: ["new.txt"] })
-        tryVerify(function () { return names().indexOf("new.txt") >= 0 }, 2500, "new file appears")
-        for (var k = 0; k < 3; k++) {
-          var name = before[k].entry.name
-          verify(list.itemAtIndex(names().indexOf(name)) === before[k], name + " keeps its delegate")
-        }
-
-        mock.statItems = ({})
-        wait(1100)
-        mock.watchCallback({ names: [] })
-        waitRows()
-      }
-
-      function test_3hb_filterResetKeepsScrolling() {
-        waitRows()
-        browser.setView("list")
-        var saved = mock.files
-        var many = []
-        for (var i = 0; i < 400; i++) many.push(["file-" + (1000 + i) + ".txt", "f", i, i, 420, null])
-        mock.files = many
-        pane().refresh()
-        tryVerify(function () { return pane().rows.length === 400 }, 5000)
-        var list = findChild(pane(), "fileList")
-        wait(300)
-        list.contentY = 3000
-        tryVerify(function () { return list.contentY > 2000 }, 2000, "the list scrolls down")
-        wait(100)
-        pane().filter = "file-11"
-        tryVerify(function () { return pane().rows.length === 100 }, 2000)
-        pane().filter = ""
-        tryVerify(function () { return pane().rows.length === 400 }, 2000)
-        wait(100)
-        compare(list.originY, 0, "replacing every row starts the list afresh")
-        list.positionViewAtBeginning()
-        wait(100)
-        compare(list.indexAt(10, list.contentY + 5), 0, "the first row shows at the top")
-        mock.files = saved
-        pane().refresh()
-        waitRows()
-      }
-
-      function beginPick() {
-        browser.beginPickSession()
-        tryCompare(browser, "pickInputHeld", false)
-      }
-
       function menuLabels(items) { return items.filter(function (i) { return i.label !== "" }).map(function (i) { return i.label }) }
 
       function test_3i_sidebarMenu() {
@@ -767,17 +681,6 @@ ShellRoot {
         tryCompare(user, "text", "menno")
         compare(browser.connectFailed, true)
         verify(browser.connectStatus.indexOf("Permission denied") === 0, browser.connectStatus)
-        var password = findChild(browser, "passwordField")
-        tryCompare(password, "activeFocus", true)
-        keyClick(Qt.Key_A)
-        keyClick(Qt.Key_B)
-        keyClick(Qt.Key_Backspace)
-        compare(password.text, "a", "the password field still edits")
-        compare(password.editUndo.length, 0, "a password keeps no undo history")
-        keyClick(Qt.Key_Z, Qt.ControlModifier)
-        compare(password.text, "a", "so undo cannot bring a typed password back")
-        keyClick(Qt.Key_Y, Qt.ControlModifier)
-        compare(password.text, "a", "and neither can redo")
         browser.closeDialog()
 
         mock.calls = []
@@ -888,13 +791,6 @@ ShellRoot {
         compare(browser.dialogMode, "unlock", "a wrong passphrase keeps the dialog open")
         compare(browser.unlockStatus, "Wrong passphrase. Try again.")
         compare(field.text, "", "a wrong passphrase is cleared")
-        tryCompare(field, "activeFocus", true)
-        keyClick(Qt.Key_A)
-        keyClick(Qt.Key_B)
-        compare(field.text, "ab", "typing edits the passphrase")
-        compare(field.editUndo.length, 0, "a passphrase keeps no undo history")
-        keyClick(Qt.Key_Z, Qt.ControlModifier)
-        compare(field.text, "ab", "and undo leaves it alone")
 
         mock.unlockResult = { path: "/tmp/docs" }
         mock.calls = []
@@ -1011,83 +907,6 @@ ShellRoot {
         verify(String(shown.source).indexOf("/tmp/beta.png") < 0, "the original image never reaches the shell's decoder")
         keyClick(Qt.Key_Space)
         verify(!browser.previewOpen)
-      }
-
-      function test_5e_previewZoomAndPan() {
-        waitRows()
-        var savedExts = mock.thumbExts
-        mock.thumbExts = { yml: true, png: true }
-        mock.thumbResult = String(Qt.resolvedUrl("FilePlugin/icon.png")).replace(/^file:\/\//, "")
-        mock.calls = []
-        var png = Model.decodeEntry(["beta.png", "f", 10, 100, 420, null], "/tmp")
-        browser.showPreview(png)
-        var image = findChild(browser, "previewImage")
-        tryCompare(image, "status", Image.Ready)
-        verify(String(image.source).indexOf("/tmp/beta.png") < 0, "zooming still shows the helper's preview, never the original")
-        compare(mock.called("thumbnailFor").args[2], "xx-large")
-        var area = findChild(browser, "previewZoomArea")
-        verify(area.enabled)
-
-        mouseWheel(area, area.width / 2, area.height / 2, 0, 120)
-        verify(browser.previewZoom > 1, "the wheel zooms in")
-        browser.zoomPreviewAt(4, area.width / 2, area.height / 2)
-        mouseDrag(area, area.width / 2, area.height / 2, 40, 30)
-        verify(browser.previewPanX > 0 && browser.previewPanY > 0, "dragging pans")
-        browser.panPreview(100000, -100000)
-        var size = browser.previewPaintedSize(browser.previewZoom)
-        compare(browser.previewPanX, Math.max(0, (size.w - area.width) / 2), "panning stops at the edge")
-        compare(browser.previewPanY, -Math.max(0, (size.h - area.height) / 2))
-        mouseDoubleClickSequence(area)
-        compare(browser.previewZoom, 1, "a double click resets")
-        compare(browser.previewPanX, 0)
-
-        keyClick(Qt.Key_Equal)
-        verify(browser.previewZoom > 1, "+ zooms in")
-        keyClick(Qt.Key_Minus)
-        compare(browser.previewZoom, 1, "- zooms back out")
-        for (var i = 0; i < 30; i++) browser.zoomPreviewAt(1.25, 10, 10)
-        compare(browser.previewZoom, browser.previewZoomMax)
-        browser.panPreview(5, 5)
-        browser.showPreview(Model.decodeEntry(["gamma.png", "f", 10, 100, 420, null], "/tmp"))
-        compare(browser.previewZoom, browser.previewZoomMax, "the zoom stays while moving to the next picture")
-        compare(browser.previewPanX, 0, "and the next picture starts centred")
-        keyClick(Qt.Key_0)
-        compare(browser.previewZoom, 1)
-        browser.closePreview()
-
-        compare(browser.previewSide, 1024, "automatic keeps the standard preview on a small window")
-        verify(!findChild(browser, "previewBase").active, "and makes no second preview")
-
-        function buckets() { return mock.calls.filter(function (c) { return c.name === "thumbnailFor" }).map(function (c) { return c.args[2] }) }
-        mock.updateSetting("previewSize", "4096")
-        mock.calls = []
-        browser.showPreview(png)
-        tryVerify(function () { return buckets().indexOf("preview-4096") >= 0 })
-        verify(buckets().indexOf("xx-large") >= 0, "the standard preview shows while the big one is made")
-        tryCompare(image, "status", Image.Ready)
-        verify(!findChild(browser, "previewBase").visible, "the standard preview steps aside once the big one is ready")
-        browser.closePreview()
-        compare(browser.previewZoom, 1, "closing resets the zoom")
-
-        mock.thumbResults = { "preview-4096": "" }
-        mock.calls = []
-        browser.showPreview(png)
-        var base = findChild(browser, "previewBase")
-        tryCompare(base, "status", Image.Ready)
-        verify(base.visible, "if the big preview cannot be made the standard one stays")
-        verify(browser.previewImageReady)
-        verify(findChild(browser, "previewZoomArea").enabled, "and can still be zoomed")
-        browser.closePreview()
-        mock.thumbResults = ({})
-
-        mock.updateSetting("previewSize", "7680")
-        mock.calls = []
-        browser.showPreview(png)
-        tryVerify(function () { return buckets().indexOf("preview-7680") >= 0 })
-        browser.closePreview()
-        mock.updateSetting("previewSize", "auto")
-        mock.thumbResult = ""
-        mock.thumbExts = savedExts
       }
 
       function test_5b_audioPreview() {
@@ -1346,7 +1165,7 @@ ShellRoot {
         mock.pickRequest = null
         browser.pickerRequest = { mode: "open", multiple: false, directory: false, result: "/run/x.json",
           filters: [{ name: "Images", patterns: ["*.png"] }, { name: "All", patterns: ["*"] }], currentFilter: 0 }
-        beginPick()
+        browser.beginPickSession()
         verify(findChild(browser, "pickBar").visible)
         tryVerify(function () { return !pane().loading && pane().rows.length === 2 })
         waitForRendering(browser)
@@ -1368,7 +1187,7 @@ ShellRoot {
       function test_8_pickSaveAndCancel() {
         mock.calls = []
         browser.pickerRequest = { mode: "save", result: "/run/y.json", currentFolder: "/tmp", currentName: "new.txt", filters: [] }
-        beginPick()
+        browser.beginPickSession()
         tryVerify(function () { return !pane().loading && pane().rows.length === 3 })
         waitForRendering(browser)
         mouseClick(findChild(browser, "pickAccept"))
@@ -1377,7 +1196,7 @@ ShellRoot {
         var savedStat = mock.statItems
         mock.statItems = { "/tmp/alpha.yml": { kind: "f", size: 30, linkTarget: null } }
         browser.pickerRequest = { mode: "save", result: "/run/z.json", currentFolder: "/tmp", currentName: "alpha.yml" }
-        beginPick()
+        browser.beginPickSession()
         tryVerify(function () { return !pane().loading && pane().rows.length === 3 })
         waitForRendering(browser)
         mouseClick(findChild(browser, "pickAccept"))
@@ -1390,7 +1209,7 @@ ShellRoot {
         mock.calls = []
         mock.statItems = { "/tmp/.hidden.txt": { kind: "f", size: 1, linkTarget: null } }
         browser.pickerRequest = { mode: "save", result: "/run/h.json", currentFolder: "/tmp", currentName: ".hidden.txt" }
-        beginPick()
+        browser.beginPickSession()
         tryVerify(function () { return !pane().loading && pane().rows.length === 3 })
         mouseClick(findChild(browser, "pickAccept"))
         compare(mock.called("finishPick"), null, "a hidden file that is not in the view still asks before replacing")
@@ -1404,7 +1223,7 @@ ShellRoot {
         mock.statItems = savedStat
         mock.calls = []
         browser.pickerRequest = { mode: "open", result: "/run/w.json" }
-        beginPick()
+        browser.beginPickSession()
         waitForRendering(browser)
         keyClick(Qt.Key_Escape)
         compare(mock.called("finishPick").args[0].ok, false)
@@ -1448,45 +1267,10 @@ ShellRoot {
         mock.calls = []
         pane().selectAll()
         keyClick(Qt.Key_Return)
-        compare(count("openExternallyFiles"), 1, "the files open in one go")
-        compare(mock.called("openExternallyFiles").args[0], ["/tmp/alpha.yml", "/tmp/beta.png"], "both files open")
+        var opened = mock.calls.filter(function (c) { return c.name === "openExternally" })
+        compare(opened.length, 2, "both files open")
         compare(browser.tabsA.length, 2, "the folder opens in a new tab")
         keyClick(Qt.Key_W, Qt.ControlModifier)
-        pane().clearSelection()
-      }
-
-      function test_9ba_menuActsOnTheWholeSelection() {
-        waitRows()
-        mock.updateSetting("editorChoice", "omarchy")
-        pane().setSortOrder("name", false)
-        var alpha = names().indexOf("alpha.yml")
-        var beta = names().indexOf("beta.png")
-        pane().setCursor(alpha, false, false)
-        pane().setCursor(beta, false, true)
-        var clicked = pane().cursorEntry()
-        compare(clicked.name, "beta.png")
-        compare(pane().selectedEntries.length, 2)
-
-        mock.calls = []
-        browser.menuEntry = clicked
-        browser.runAction("open")
-        compare(mock.called("openExternallyFiles").args[0].length, 2, "Open in the menu opens every selected file")
-        mock.calls = []
-        browser.menuEntry = clicked
-        browser.runAction("editor")
-        compare(mock.called("launchEditor").args[1].length, 2, "Open in editor gets every selected file")
-        browser.menuEntry = clicked
-        browser.runAction("openwith")
-        compare(browser.dialogTitle, "Open 2 items with")
-        wait(200)
-        mouseDoubleClickSequence(findChild(browser, "openWithList").itemAtIndex(0))
-        compare(mock.called("openWith").args[1].length, 2, "Open with gets every selected file")
-
-        mock.calls = []
-        var outside = Model.decodeEntry(["gamma.txt", "f", 1, 100, 420, null], "/tmp")
-        browser.menuEntry = outside
-        browser.runAction("editor")
-        compare(mock.called("launchEditor").args[1], ["/tmp/gamma.txt"], "an item outside the selection acts alone")
         pane().clearSelection()
       }
 
@@ -1497,13 +1281,14 @@ ShellRoot {
         browser.openConfirmLimit = 2
         pane().selectAll()
         keyClick(Qt.Key_Return)
-        compare(mock.called("openExternallyFiles"), null, "asks before opening more than the limit")
+        compare(mock.called("openExternally"), null, "asks before opening more than the limit")
         keyClick(Qt.Key_Escape)
-        compare(mock.called("openExternallyFiles"), null, "cancel opens nothing")
+        compare(mock.called("openExternally"), null, "cancel opens nothing")
         compare(browser.tabsA.length, 1)
         keyClick(Qt.Key_Return)
         keyClick(Qt.Key_Return)
-        compare(mock.called("openExternallyFiles").args[0], ["/tmp/alpha.yml", "/tmp/beta.png"], "confirming opens both files")
+        var opened = mock.calls.filter(function (c) { return c.name === "openExternally" })
+        compare(opened.length, 2, "confirming opens both files")
         compare(browser.tabsA.length, 2, "confirming opens the folder in a new tab")
         browser.openConfirmLimit = limit
         keyClick(Qt.Key_W, Qt.ControlModifier)
@@ -1526,7 +1311,6 @@ ShellRoot {
 
       function test_9ca_editorAndAgentItems() {
         waitRows()
-        mock.updateSetting("editorChoice", "omarchy")
         var file = { name: "notes.txt", path: "/tmp/notes.txt", isDir: false, ext: "txt" }
         var folder = { name: "docs", path: "/tmp/docs", isDir: true, ext: "" }
         var fileLabels = menuLabels(browser.contextActions(file))
@@ -1536,7 +1320,7 @@ ShellRoot {
         mock.calls = []
         browser.menuEntry = file
         browser.runAction("editor")
-        compare(mock.called("launchEditor").args[1], ["/tmp/notes.txt"])
+        compare(mock.called("openEditor").args[0], "/tmp/notes.txt")
 
         verify(menuLabels(browser.contextActions(folder)).indexOf("Open Claude Code here") < 0, "no agent item without an agent")
         mock.agentAvailable = true
@@ -1551,162 +1335,6 @@ ShellRoot {
         compare(mock.called("openAgent").args[0], "/tmp/docs")
         mock.agentAvailable = false
         mock.agentName = "Claude Code"
-      }
-
-      function test_9cb_editorIsAskedForOnce() {
-        waitRows()
-        mock.updateSetting("editorChoice", "")
-        mock.updateSetting("editor", "")
-        var file = { name: "notes.txt", path: "/tmp/notes.txt", isDir: false, ext: "txt" }
-        function values() { return browser.editorPickOptions().map(function (o) { return o.value }) }
-
-        mock.calls = []
-        browser.menuEntry = file
-        browser.runAction("editor")
-        tryCompare(browser, "dialogMode", "editorpick")
-        compare(mock.called("launchEditor"), null, "nothing opens before you choose")
-        verify(mock.called("refreshDefaults") !== null)
-        compare(values(), ["omarchy", "omafile", "app:code", "app:nvim", "app:nano", "own"], "Omarchy's default, Omafile's editor, the editors you have, or a command")
-        compare(browser.editorPickOptions()[0].label, "Omarchy's default, Neovim")
-        keyClick(Qt.Key_Escape)
-        compare(browser.dialogMode, "")
-        compare(mock.called("launchEditor"), null, "cancelling opens nothing")
-        compare(mock.editorChoice, "", "and saves nothing")
-
-        browser.menuEntry = file
-        browser.runAction("editor")
-        tryCompare(browser, "dialogMode", "editorpick")
-        keyClick(Qt.Key_Return)
-        compare(mock.editorChoice, "omarchy", "Omarchy's default is the first choice")
-        compare(mock.called("launchEditor").args[0].mode, "omarchy")
-        compare(mock.called("launchEditor").args[1], ["/tmp/notes.txt"])
-        mock.calls = []
-        browser.runAction("editor")
-        compare(browser.dialogMode, "", "it asks only once")
-        compare(mock.called("launchEditor").args[0].mode, "omarchy")
-
-        mock.updateSetting("editorChoice", "")
-        browser.menuEntry = file
-        browser.runAction("editor")
-        tryCompare(browser, "dialogMode", "editorpick")
-        keyClick(Qt.Key_Down)
-        compare(browser.editorPick, "omafile")
-        keyClick(Qt.Key_Down)
-        compare(browser.editorPick, "app:code")
-        verify(browser.editorPickCanAlso, "VS Code can also become Omarchy's default")
-        var also = findChild(browser, "editorPickAlso")
-        verify(also.visible)
-        waitForRendering(browser)
-        mouseClick(also)
-        verify(browser.editorPickAlso)
-        mock.calls = []
-        keyClick(Qt.Key_Return)
-        compare(mock.called("setOmarchyEditor").args[0], "code")
-        compare(mock.editorCommand, "code")
-        compare(mock.editorChoice, "own")
-        compare(mock.called("launchEditor").args[0].command, "code")
-
-        mock.updateSetting("editor", "-e nano")
-        mock.missingPrograms = { "-e": true }
-        mock.calls = []
-        browser.menuEntry = file
-        browser.runAction("editor")
-        tryCompare(browser, "dialogMode", "editorpick")
-        compare(mock.called("launchEditor"), null, "a command that does not exist is never run")
-        verify(browser.editorPickError.indexOf("\u201c-e nano\u201d is not a command") === 0, browser.editorPickError)
-        browser.chooseEditorPick("app:nano")
-        verify(!browser.editorPickCanAlso, "nano cannot be Omarchy's default")
-        browser.chooseEditorPick("own")
-        var typed = findChild(browser, "editorCustomField")
-        tryCompare(typed, "activeFocus", true)
-        mock.missingPrograms = { "zz-missing": true }
-        typed.text = "zz-missing --flag"
-        keyClick(Qt.Key_Return)
-        tryVerify(function () { return browser.editorPickError.indexOf("zz-missing") > 0 })
-        compare(browser.dialogMode, "editorpick", "a typed command that does not exist keeps the dialog open")
-        typed.text = "nano -w"
-        keyClick(Qt.Key_Return)
-        tryCompare(browser, "dialogMode", "")
-        compare(mock.editorCommand, "nano -w")
-        compare(mock.called("launchEditor").args[0].command, "nano -w")
-        mock.missingPrograms = ({})
-
-        compare(browser.editorSettingValue, "own")
-        browser.chooseEditorSetting("app:nano")
-        compare(browser.editorSettingValue, "app:nano")
-        browser.chooseEditorSetting("omarchy")
-        compare(browser.editorSettingValue, "omarchy")
-        browser.chooseEditorSetting("own")
-        compare(browser.editorSettingValue, "own")
-        browser.chooseEditorSetting("")
-        compare(browser.editorSettingValue, "")
-        compare(mock.editorCommand, "", "asking again clears the old command")
-
-        mock.omarchyAgent = "omp"
-        mock.omarchyAgentFound = true
-        compare(browser.agentPlaceholder(), "Omarchy's default, Oh My Pi")
-        mock.omarchyAgentFound = false
-        mock.claudeAvailable = true
-        compare(browser.agentPlaceholder(), "Claude Code")
-        mock.omarchyAgent = ""
-        mock.claudeAvailable = false
-        mock.updateSetting("editorChoice", "omarchy")
-      }
-
-      function test_9cc_omafileEditorAsDefault() {
-        waitRows()
-        mock.updateSetting("editorChoice", "")
-        mock.updateSetting("editor", "")
-        mock.textFiles = { "/tmp/alpha.yml": { text: "key: value\n" } }
-        var alpha = Model.decodeEntry(["alpha.yml", "f", 30, 300, 420, null], "/tmp")
-        var view = editorView()
-        mock.calls = []
-        browser.menuEntry = alpha
-        browser.runAction("editor")
-        tryCompare(browser, "dialogMode", "editorpick")
-        browser.chooseEditorPick("omafile")
-        keyClick(Qt.Key_Return)
-        compare(mock.editorChoice, "omafile", "Omafile's editor can be the default")
-        verify(view.open, "the file opens in Omafile's editor")
-        compare(mock.called("launchEditor"), null, "no other app is started")
-        tryCompare(view, "loading", false)
-        view.finishClose()
-
-        mock.calls = []
-        browser.menuEntry = alpha
-        browser.runAction("editor")
-        compare(browser.dialogMode, "", "it is not asked again")
-        verify(view.open, "Open in editor goes straight to Omafile's editor")
-        tryCompare(view, "loading", false)
-        view.finishClose()
-
-        var docs = Model.decodeEntry(["docs", "d", 0, 200, 493, null], "/tmp")
-        mock.calls = []
-        browser.menuEntry = docs
-        browser.runAction("editor")
-        compare(view.open, false)
-        compare(mock.called("launchEditor").args[0].mode, "omarchy", "a folder opens in Omarchy's default editor")
-        compare(mock.called("launchEditor").args[1], ["/tmp/docs"])
-        verify(browser.statusText.indexOf("one text file at a time") > 0, browser.statusText)
-
-        pane().setSortOrder("name", false)
-        pane().setCursor(names().indexOf("alpha.yml"), false, false)
-        pane().setCursor(names().indexOf("beta.png"), false, true)
-        mock.calls = []
-        browser.menuEntry = pane().cursorEntry()
-        browser.runAction("editor")
-        compare(view.open, false)
-        compare(mock.called("launchEditor").args[1].length, 2, "several files open together in Omarchy's default editor")
-        pane().clearSelection()
-
-        compare(browser.editorSettingValue, "omafile")
-        verify(browser.editorSettingOptions().map(function (o) { return o.value }).indexOf("omafile") === 2)
-        browser.chooseEditorSetting("omarchy")
-        compare(mock.editorChoice, "omarchy")
-        browser.chooseEditorSetting("omafile")
-        compare(mock.editorChoice, "omafile")
-        mock.updateSetting("editorChoice", "omarchy")
-        mock.textFiles = ({})
       }
 
       function test_9d_pasteFromSystemClipboard() {
@@ -1885,7 +1513,7 @@ ShellRoot {
         mock.calls = []
         browser.openEntries([zip, tar, text])
         compare(count("extractArchive"), 2, "every opened archive is extracted")
-        compare(mock.called("openExternallyFiles").args[0], ["/tmp/notes.txt"])
+        compare(mock.called("openExternally").args[0], "/tmp/notes.txt")
 
         mock.extractResults = { "/tmp/pack.zip": { error: "damaged" } }
         mock.calls = []
@@ -1921,355 +1549,6 @@ ShellRoot {
         mouseClick(findChild(row, "cancelTransfer"))
         compare(mock.called("cancelTransfer").args[0], 9, "an extraction can be cancelled from the panel")
         mock.transfers = []
-      }
-
-      function editorView() { return findChild(browser, "textEditorView") }
-      function editorText() { return findChild(browser, "textEditorText") }
-
-      function test_9ka_textEditor() {
-        waitRows()
-        var alpha = Model.decodeEntry(["alpha.yml", "f", 30, 300, 420, null], "/tmp")
-        var png = Model.decodeEntry(["beta.png", "f", 10, 100, 420, null], "/tmp")
-        var docs = Model.decodeEntry(["docs", "d", 0, 200, 493, null], "/tmp")
-        verify(menuLabels(browser.contextActions(alpha)).indexOf("Edit") >= 0, "text files can be edited")
-        verify(menuLabels(browser.contextActions(png)).indexOf("Edit") < 0, "pictures cannot")
-        verify(menuLabels(browser.contextActions(docs)).indexOf("Edit") < 0, "folders cannot")
-
-        mock.textFiles = { "/tmp/alpha.yml": { text: "key: value\n  nested: a b\n" } }
-        mock.calls = []
-        browser.menuEntry = alpha
-        browser.runAction("edittext")
-        var view = editorView()
-        var area = editorText()
-        verify(view.open)
-        tryCompare(view, "loading", false)
-        tryCompare(area, "activeFocus", true)
-        compare(view.dirty, false)
-        keyClick(Qt.Key_X)
-        keyClick(Qt.Key_Y)
-        compare(area.model.indexOf("xykey: value"), 0, "typing edits the file")
-        verify(view.dirty)
-        verify(findChild(browser, "textEditorTitle").text.indexOf("●") === 0, "the title shows unsaved changes")
-        verify(browser.holdsUnsaved)
-        keyClick(Qt.Key_Down)
-        keyClick(Qt.Key_End)
-        keyClick(Qt.Key_Return)
-        keyClick(Qt.Key_Z)
-        compare(area.model, "xykey: value\n  nested: a b\n  z\n", "Enter keeps the indent, and a no-break space is kept")
-        tryCompare(view, "position", "Line 3, column 4")
-        keyClick(Qt.Key_S, Qt.ControlModifier)
-        var write = mock.called("writeText")
-        compare(write.args[0], "/tmp/alpha.yml")
-        compare(write.args[1], area.model, "the exact text is saved")
-        compare(write.args[3], false)
-        tryCompare(view, "dirty", false)
-        compare(findChild(browser, "textEditorNotice").text, "Saved")
-
-        keyClick(Qt.Key_F, Qt.ControlModifier)
-        var find = findChild(browser, "textEditorFind")
-        tryCompare(find, "activeFocus", true)
-        find.text = "NESTED"
-        keyClick(Qt.Key_Return)
-        compare(findChild(browser, "textEditorNotice").text, "Not found", "a search with capitals is exact")
-        find.text = "nested"
-        keyClick(Qt.Key_Return)
-        compare(area.model.slice(area.selectionStart, area.selectionEnd), "nested")
-        keyClick(Qt.Key_Escape)
-        tryCompare(area, "activeFocus", true)
-
-        keyClick(Qt.Key_Q)
-        verify(view.dirty)
-        mock.calls = []
-        keyClick(Qt.Key_Escape)
-        compare(view.prompt, "unsaved", "closing with unsaved changes asks first")
-        verify(view.open)
-        waitForRendering(browser)
-        mouseClick(findChild(browser, "textEditorDiscard"))
-        compare(view.open, false)
-        compare(mock.called("writeText"), null, "Don't save writes nothing")
-
-        browser.editText(alpha)
-        tryCompare(view, "loading", false)
-        tryCompare(area, "activeFocus", true)
-        keyClick(Qt.Key_W)
-        mock.writeResult = { code: "ECONFLICT", message: "changed" }
-        mock.calls = []
-        keyClick(Qt.Key_S, Qt.ControlModifier)
-        tryCompare(view, "prompt", "conflict")
-        verify(findChild(browser, "textEditorPromptText").text.indexOf("changed on disk") > 0)
-        waitForRendering(browser)
-        mouseClick(findChild(browser, "textEditorConfirm"))
-        tryVerify(function () { return mock.calls.filter(function (c) { return c.name === "writeText" }).length === 2 })
-        compare(mock.calls.filter(function (c) { return c.name === "writeText" })[1].args[3], true, "Overwrite forces the save")
-        tryCompare(view, "dirty", false)
-        mock.writeResult = null
-
-        keyClick(Qt.Key_E)
-        browser.requestClose()
-        compare(view.prompt, "unsaved", "closing Omafile asks before losing edits")
-        waitForRendering(browser)
-        mouseClick(findChild(browser, "textEditorConfirm"))
-        tryCompare(view, "open", false)
-        compare(mock.calls.filter(function (c) { return c.name === "writeText" }).length, 3, "Save then closes")
-
-        mock.textFiles = { "/tmp/locked.txt": { text: "keep me", writable: false } }
-        browser.editText(Model.decodeEntry(["locked.txt", "f", 7, 100, 292, null], "/tmp"))
-        tryCompare(view, "loading", false)
-        tryCompare(area, "activeFocus", true)
-        keyClick(Qt.Key_A)
-        compare(area.model, "keep me", "a read only file is not changed")
-        compare(findChild(browser, "textEditorNotice").text, "This file is read only for you")
-        verify(!findChild(browser, "textEditorSave").enabled)
-        keyClick(Qt.Key_Escape)
-        compare(view.open, false, "nothing to save, so it closes at once")
-
-        browser.editText(Model.decodeEntry(["notes.txt", "f", 7, 100, 420, null], "/tmp"))
-        tryVerify(function () { return view.loadError !== "" })
-        verify(view.loadError.indexOf("not a text file") > 0)
-        waitForRendering(browser)
-        mouseClick(findChild(browser, "textEditorClose"))
-        compare(view.open, false)
-        mock.textFiles = ({})
-      }
-
-      function test_9kc_editorAutoSave() {
-        waitRows()
-        function writes() { return mock.calls.filter(function (c) { return c.name === "writeText" }) }
-        var view = editorView()
-        var area = editorText()
-        compare(view.autoSave, false, "auto save is off by default")
-        mock.updateSetting("editorAutoSave", true)
-        view.autoSaveDelay = 200
-        mock.textFiles = { "/tmp/auto.txt": { text: "one\n" } }
-        mock.calls = []
-        browser.editText(Model.decodeEntry(["auto.txt", "f", 4, 100, 420, null], "/tmp"))
-        tryCompare(view, "loading", false)
-        tryCompare(area, "activeFocus", true)
-        compare(findChild(browser, "textEditorAutoSave").text, "Auto save on")
-        keyClick(Qt.Key_End, Qt.ControlModifier)
-        keyClick(Qt.Key_A)
-        compare(writes().length, 0, "nothing is saved while you type")
-        tryVerify(function () { return writes().length === 1 }, 3000)
-        compare(writes()[0].args[1], "one\na")
-        tryCompare(view, "dirty", false)
-        keyClick(Qt.Key_B); keyClick(Qt.Key_C); keyClick(Qt.Key_D)
-        tryVerify(function () { return writes().length === 2 }, 3000)
-        wait(400)
-        compare(writes().length, 2, "a burst of typing is saved once")
-        compare(writes()[1].args[1], "one\nabcd")
-
-        mock.writeResult = { code: "ECONFLICT", message: "changed" }
-        keyClick(Qt.Key_E)
-        tryCompare(view, "prompt", "conflict")
-        waitForRendering(browser)
-        mouseClick(findChild(browser, "textEditorCancel"))
-        verify(view.autoSavePaused)
-        compare(view.notice, "Auto save is paused until you save")
-        var before = writes().length
-        keyClick(Qt.Key_F)
-        wait(600)
-        compare(writes().length, before, "after a conflict it stops saving on its own")
-        compare(view.prompt, "", "and does not keep asking")
-        mock.writeResult = null
-        keyClick(Qt.Key_S, Qt.ControlModifier)
-        tryVerify(function () { return writes().length === before + 1 })
-        verify(writes()[before].args[3] === false)
-        tryCompare(view, "autoSavePaused", false, 3000, "saving by hand turns auto save back on")
-
-        keyClick(Qt.Key_G)
-        keyClick(Qt.Key_Escape)
-        compare(view.prompt, "", "closing saves instead of asking")
-        tryCompare(view, "open", false)
-        compare(writes()[writes().length - 1].args[1].slice(-1), "g", "the last keystroke is saved")
-
-        browser.editText(Model.decodeEntry(["auto.txt", "f", 4, 100, 420, null], "/tmp"))
-        tryCompare(view, "loading", false)
-        waitForRendering(browser)
-        mouseClick(findChild(browser, "textEditorAutoSave"))
-        compare(view.autoSave, false)
-        compare(mock.settingNow("editorAutoSave", true), false, "the toggle is saved as a setting")
-        tryCompare(area, "activeFocus", true)
-        keyClick(Qt.Key_H)
-        wait(500)
-        var settled = writes().length
-        keyClick(Qt.Key_Escape)
-        compare(view.prompt, "unsaved", "with auto save off, closing asks again")
-        compare(writes().length, settled)
-        waitForRendering(browser)
-        mouseClick(findChild(browser, "textEditorDiscard"))
-        compare(view.open, false)
-        view.autoSaveDelay = 1000
-        mock.textFiles = ({})
-      }
-
-      function test_9kb_duplicates() {
-        waitRows()
-        var alpha = Model.decodeEntry(["alpha.yml", "f", 30, 300, 420, null], "/tmp")
-        var docs = Model.decodeEntry(["docs", "d", 0, 200, 493, null], "/tmp")
-        verify(menuLabels(browser.contextActions(alpha)).indexOf("Find duplicates…") >= 0)
-        verify(menuLabels(browser.contextActions(docs)).indexOf("Find duplicates in this folder") >= 0)
-        verify(menuLabels(browser.contextActions(null)).indexOf("Find duplicates here") >= 0)
-
-        mock.duplicateResult = { scanned: 3, groups: [{ size: 30, items: [
-          { path: "/tmp/alpha.yml", mtime: 300, size: 30 },
-          { path: "/tmp/docs/alpha copy.yml", mtime: 400, size: 30 },
-          { path: "/tmp/docs/old.yml", mtime: 100, size: 30 }] }] }
-        var savedStat = mock.statItems
-        mock.statItems = {
-          "/tmp/alpha.yml": { kind: "f", size: 30, mtime: 300 },
-          "/tmp/docs/alpha copy.yml": { kind: "f", size: 30, mtime: 400 },
-          "/tmp/docs/old.yml": { kind: "f", size: 30, mtime: 100 }
-        }
-        mock.calls = []
-        browser.menuEntry = alpha
-        browser.runAction("duplicates")
-        var view = findChild(browser, "duplicatesView")
-        verify(view.open)
-        var call = mock.called("findDuplicates")
-        compare(call.args[0], "/tmp", "a file outside home is looked for in its own folder")
-        compare(call.args[1], "/tmp/alpha.yml")
-        tryCompare(view, "searching", false)
-        compare(view.leftItem.path, "/tmp/alpha.yml", "the file you picked is on the left")
-        compare(view.rightItem.path, "/tmp/docs/alpha copy.yml")
-        compare(view.tagFor(view.rightItem), "Newest")
-        compare(findChild(browser, "duplicatesTitle").text, "Copies of alpha.yml")
-        verify(findChild(browser, "duplicatesSummary").text.indexOf("2 other copies found") === 0, findChild(browser, "duplicatesSummary").text)
-        keyClick(Qt.Key_Right)
-        compare(view.rightItem.path, "/tmp/docs/old.yml")
-        compare(view.tagFor(view.rightItem), "Oldest")
-        keyClick(Qt.Key_Right)
-        compare(view.rightItem.path, "/tmp/docs/alpha copy.yml", "the arrows wrap around")
-
-        mock.statItems["/tmp/docs/alpha copy.yml"] = { kind: "f", size: 31, mtime: 400 }
-        mock.calls = []
-        keyClick(Qt.Key_Delete)
-        compare(mock.called("trashPaths"), null, "a copy that changed since the search is not trashed")
-        verify(view.notice.indexOf("changed since the search") > 0, view.notice)
-        mock.statItems["/tmp/docs/alpha copy.yml"] = { kind: "f", size: 30, mtime: 400 }
-        mock.calls = []
-        keyClick(Qt.Key_Delete)
-        compare(mock.called("trashPaths").args[0], ["/tmp/docs/alpha copy.yml"], "Delete trashes the right copy")
-        compare(view.items.length, 2)
-        compare(view.rightItem.path, "/tmp/docs/old.yml")
-
-        view.askKeepOnly(view.leftItem)
-        verify(findChild(browser, "duplicatesConfirm").visible)
-        mock.calls = []
-        waitForRendering(browser)
-        mouseClick(findChild(browser, "duplicatesConfirmKeep"))
-        compare(mock.called("statPaths").args[0], ["/tmp/docs/old.yml", "/tmp/alpha.yml"], "the kept copy is checked too")
-        compare(mock.called("trashPaths").args[0], ["/tmp/docs/old.yml"], "Keep only this trashes every other copy")
-        compare(view.groups.length, 0)
-        verify(findChild(browser, "duplicatesSummary").text.indexOf("No duplicates found") === 0)
-        keyClick(Qt.Key_Escape)
-        compare(view.open, false)
-
-        mock.duplicateResult = { scanned: 9, groups: [
-          { size: 500, items: [{ path: "/tmp/a.bin", mtime: 1, size: 500 }, { path: "/tmp/docs/a.bin", mtime: 2, size: 500 }] },
-          { size: 20, items: [{ path: "/tmp/b.txt", mtime: 1, size: 20 }, { path: "/tmp/docs/b.txt", mtime: 1, size: 20 }] }] }
-        mock.calls = []
-        browser.menuEntry = null
-        browser.runAction("duplicates")
-        compare(mock.called("findDuplicates").args[1], "", "the folder menu looks for every duplicate")
-        tryCompare(view, "searching", false)
-        compare(findChild(browser, "duplicatesTitle").text, "Duplicates in tmp")
-        verify(findChild(browser, "duplicateGroups").visible)
-        compare(view.tagFor(view.leftItem), "Oldest")
-        keyClick(Qt.Key_Down)
-        compare(view.group.size, 20)
-        compare(view.tagFor(view.leftItem), "", "copies with the same date get no tag")
-        view.reveal("/tmp/docs/b.txt")
-        compare(view.open, false, "Show in folder closes the finder")
-        tryCompare(pane(), "path", "/tmp/docs")
-        pane().navigate("/tmp")
-        waitRows()
-
-        mock.duplicateResult = { pending: true }
-        mock.calls = []
-        browser.findDuplicates(alpha)
-        verify(view.searching)
-        keyClick(Qt.Key_Escape)
-        compare(view.open, false)
-        compare(mock.called("cancel").args[0], 77, "closing stops the search")
-
-        mock.duplicateResult = { error: { code: "EINVAL", message: "this file is empty, so every empty file would match" } }
-        browser.findDuplicates(alpha)
-        tryCompare(view, "searching", false)
-        verify(view.error.indexOf("empty") > 0)
-        view.close()
-        mock.duplicateResult = null
-        mock.statItems = savedStat
-      }
-
-      function test_9k_transcode() {
-        waitRows()
-        var png = Model.decodeEntry(["beta.png", "f", 10, 100, 420, null], "/tmp")
-        var yml = Model.decodeEntry(["alpha.yml", "f", 30, 300, 420, null], "/tmp")
-        var clip = Model.decodeEntry(["clip.mov", "f", 10, 100, 420, null], "/tmp")
-        verify(menuLabels(browser.contextActions(png)).indexOf("Transcode…") >= 0, "pictures can be transcoded")
-        verify(menuLabels(browser.contextActions(yml)).indexOf("Transcode…") < 0, "other files cannot")
-
-        mock.calls = []
-        browser.menuEntry = png
-        browser.runAction("transcode")
-        compare(browser.dialogMode, "transcode")
-        compare(browser.transcodeFormat, "jpg")
-        compare(browser.transcodeResolution, "medium")
-        compare(findChild(browser, "dialogConfirmButton").text, "Transcode")
-        findChild(browser, "transcodeFormat").changed("png")
-        findChild(browser, "transcodeSize").changed("low")
-        keyClick(Qt.Key_Return)
-        compare(browser.dialogMode, "")
-        var call = mock.called("transcodePaths")
-        compare(call.args[0], ["/tmp/beta.png"])
-        compare(call.args[1], "png")
-        compare(call.args[2], "low")
-        compare(browser.statusText, "Transcoded 1 file")
-
-        browser.menuEntry = clip
-        browser.runAction("transcode")
-        compare(browser.transcodeFormat, "mp4", "a video gets video formats")
-        compare(browser.transcodeResolution, "1080p")
-        browser.closeDialog()
-
-        browser.menuEntry = png
-        browser.runAction("transcode")
-        compare(browser.transcodeFormat, "png", "the last picture choice is kept")
-        compare(browser.transcodeResolution, "low")
-        var sizes = findChild(browser, "transcodeSize")
-        verify(sizes.options.map(function (o) { return o.value }).indexOf("original") >= 0, "pictures can keep their size")
-        var formats = findChild(browser, "transcodeFormat").options.map(function (o) { return o.value })
-        compare(formats, ["jpg", "png", "webp", "avif", "jxl"], "pictures can become WebP, AVIF and JPEG XL")
-        function sizeValues() { return findChild(browser, "transcodeSize").options.map(function (o) { return o.value }) }
-        browser.setTranscodeFormat("jxl")
-        verify(sizeValues().indexOf("lossless") < 0, "a PNG cannot be repacked losslessly")
-        browser.closeDialog()
-        browser.menuEntry = Model.decodeEntry(["photo.jpg", "f", 10, 100, 420, null], "/tmp")
-        browser.runAction("transcode")
-        browser.setTranscodeFormat("jxl")
-        verify(sizeValues().indexOf("lossless") >= 0, "a JPG can")
-        findChild(browser, "transcodeSize").changed("lossless")
-        browser.setTranscodeFormat("webp")
-        compare(browser.transcodeResolution, "original", "leaving JPEG XL drops the lossless choice")
-        browser.closeDialog()
-        browser.menuEntry = png
-        browser.runAction("transcode")
-        sizes.changed("original")
-        mock.calls = []
-        browser.submitDialog()
-        compare(mock.called("transcodePaths").args[2], "original")
-
-        browser.menuEntry = clip
-        browser.runAction("transcode")
-        verify(findChild(browser, "transcodeSize").options.map(function (o) { return o.value }).indexOf("original") >= 0, "so can videos")
-        browser.closeDialog()
-
-        mock.transcodeResult = { error: "could not transcode this file", code: "EFAIL" }
-        browser.menuEntry = png
-        browser.runAction("transcode")
-        browser.submitDialog()
-        compare(browser.statusText, "Could not transcode: could not transcode this file")
-        mock.transcodeResult = null
       }
 
       function test_9j_compress() {
@@ -2318,7 +1597,7 @@ ShellRoot {
       function test_8b_pickSaveNamesStayInTheFolder() {
         mock.calls = []
         browser.pickerRequest = { mode: "save", result: "/run/u.json", currentFolder: "/tmp", currentName: "x.txt" }
-        beginPick()
+        browser.beginPickSession()
         tryVerify(function () { return !pane().loading && pane().rows.length === 3 })
         findChild(browser, "pickNameField").text = ".."
         browser.acceptPick(null)
@@ -2328,7 +1607,7 @@ ShellRoot {
 
         mock.calls = []
         browser.pickerRequest = { mode: "savefiles", result: "/run/s.json", currentFolder: "/tmp", files: ["a.txt", "b.txt"] }
-        beginPick()
+        browser.beginPickSession()
         tryVerify(function () { return !pane().loading && pane().rows.length === 3 })
         browser.acceptPick(null)
         var call = mock.called("finishPick")
@@ -2337,7 +1616,7 @@ ShellRoot {
 
         mock.calls = []
         browser.pickerRequest = { mode: "savefiles", result: "/run/t.json", currentFolder: "/tmp", files: ["ok.txt", "../escape.txt"] }
-        beginPick()
+        browser.beginPickSession()
         tryVerify(function () { return !pane().loading && pane().rows.length === 3 })
         browser.acceptPick(null)
         call = mock.called("finishPick")
@@ -2349,7 +1628,7 @@ ShellRoot {
       function test_8c_pickNewFolder() {
         mock.calls = []
         browser.pickerRequest = { mode: "open", directory: true, result: "/run/d.json", currentFolder: "/tmp" }
-        beginPick()
+        browser.beginPickSession()
         waitRows()
         waitForRendering(browser)
         browser.openToolbarMenu("main", findChild(browser, "mainMenuButton"))
@@ -2371,7 +1650,7 @@ ShellRoot {
       function test_8d_pickerBlocksRiskyActions() {
         mock.calls = []
         browser.pickerRequest = { mode: "open", result: "/run/g.json", currentFolder: "/tmp", appId: "org.example.App" }
-        beginPick()
+        browser.beginPickSession()
         waitRows()
         verify(browser.pickTitle().indexOf("(for org.example.App)") > 0, "the chooser names the app that asked")
         verify(pane().picking, "the panes know they are picking, so no thumbnails are made")
@@ -2391,9 +1670,6 @@ ShellRoot {
         var keys = browser.contextActions(pane().cursorEntry()).map(function (a) { return a.key })
         verify(keys.indexOf("trash") < 0 && keys.indexOf("delete") < 0 && keys.indexOf("paste") < 0 && keys.indexOf("properties") < 0)
         verify(keys.indexOf("editor") < 0, "no editor while picking")
-        verify(keys.indexOf("edittext") < 0 && keys.indexOf("duplicates") < 0, "no editing or duplicate finding while picking")
-        var pngKeys = browser.contextActions(Model.decodeEntry(["beta.png", "f", 10, 100, 420, null], "/tmp")).map(function (a) { return a.key })
-        verify(pngKeys.indexOf("transcode") < 0, "no transcoding while picking")
         verify(keys.indexOf("open") >= 0 && keys.indexOf("copy") >= 0)
         browser.acceptPick([Model.decodeEntry(["link.txt", "l", 1, 0, 0, "/etc/passwd"], "/tmp")])
         compare(mock.called("finishPick"), null, "a linked file is not handed to the app")
@@ -2427,48 +1703,63 @@ ShellRoot {
         mock.remoteRoots = []
       }
 
-      function test_8g_pickIgnoresTypingFromBeforeItOpened() {
-        pane().navigate("/tmp")
+      function test_3ha_liveUpdatesKeepRows() {
         waitRows()
-        mock.calls = []
-        var name = findChild(browser, "pickNameField")
-        browser.pickerRequest = { mode: "save", result: "/run/k.json", currentFolder: "/tmp", currentName: "report.txt" }
-        browser.beginPickSession()
-        verify(browser.pickInputHeld, "input waits while the chooser opens")
-        verify(!name.activeFocus, "the name field does not take keys straight away")
-        mouseClick(findChild(browser, "pickAccept"))
-        browser.acceptPick(null)
-        keyClick(Qt.Key_S)
-        keyClick(Qt.Key_E)
-        keyClick(Qt.Key_Return)
-        compare(mock.called("finishPick"), null, "nothing typed or clicked as the chooser opens answers it")
-        compare(name.text, "report.txt", "typing from before the chooser opened never reaches the name")
-        verify(browser.pickInputHeld, "each early key restarts the wait")
-        tryCompare(browser, "pickInputHeld", false)
-        verify(!name.activeFocus, "after early typing the name needs a click")
-        verify(browser.statusText.indexOf("Ignored typing") === 0, browser.statusText)
-        mouseClick(name)
-        verify(name.activeFocus, "a click lets the name take keys")
-        browser.cancelPick()
+        browser.setView("list")
+        pane().setSortOrder("name", false)
+        var list = findChild(pane(), "fileList")
+        verify(list !== null, "file list")
+        var before = []
+        for (var i = 0; i < 3; i++) before.push(list.itemAtIndex(i))
+        var at = names().indexOf("alpha.yml")
+        wait(1100)
+        mock.statItems = { "/tmp/alpha.yml": { kind: "f", size: 777, mtime: 700, mode: 420, linkTarget: null } }
+        mock.watchCallback({ names: ["alpha.yml"] })
+        tryVerify(function () { return pane().rows[at][2] === 777 }, 2500, "size updates")
+        for (var j = 0; j < 3; j++) verify(list.itemAtIndex(j) === before[j], "row " + j + " keeps its delegate")
+        compare(list.itemAtIndex(at).entry.size, 777)
 
-        mock.calls = []
-        browser.pickerRequest = { mode: "save", result: "/run/l.json", currentFolder: "/tmp", currentName: "report.txt" }
-        beginPick()
-        verify(name.activeFocus, "without early typing the name takes keys once the wait ends")
-        compare(name.selectedText, "report")
-        keyClick(Qt.Key_N)
-        keyClick(Qt.Key_Return)
-        compare(mock.called("finishPick").args[0].paths[0], "/tmp/n.txt")
+        wait(1100)
+        mock.statItems = { "/tmp/new.txt": { kind: "f", size: 5, mtime: 600, mode: 420, linkTarget: null } }
+        mock.watchCallback({ names: ["new.txt"] })
+        tryVerify(function () { return names().indexOf("new.txt") >= 0 }, 2500, "new file appears")
+        for (var k = 0; k < 3; k++) {
+          var name = before[k].entry.name
+          verify(list.itemAtIndex(names().indexOf(name)) === before[k], name + " keeps its delegate")
+        }
 
-        mock.calls = []
-        var file = Model.decodeEntry(["beta.png", "f", 10, 100, 420, null], "/tmp")
-        browser.pickerRequest = { mode: "open", result: "/run/m.json", currentFolder: "/tmp" }
-        browser.beginPickSession()
-        browser.handleOpenRequest(file)
-        compare(mock.called("finishPick"), null, "a double click as the chooser opens hands over nothing")
-        tryCompare(browser, "pickInputHeld", false)
-        browser.handleOpenRequest(file)
-        compare(mock.called("finishPick").args[0].paths[0], "/tmp/beta.png")
+        mock.statItems = ({})
+        wait(1100)
+        mock.watchCallback({ names: [] })
+        waitRows()
+      }
+
+      function test_3hb_filterResetKeepsScrolling() {
+        waitRows()
+        browser.setView("list")
+        var saved = mock.files
+        var many = []
+        for (var i = 0; i < 400; i++) many.push(["file-" + (1000 + i) + ".txt", "f", i, i, 420, null])
+        mock.files = many
+        pane().refresh()
+        tryVerify(function () { return pane().rows.length === 400 }, 5000)
+        var list = findChild(pane(), "fileList")
+        wait(300)
+        list.contentY = 3000
+        tryVerify(function () { return list.contentY > 2000 }, 2000, "the list scrolls down")
+        wait(100)
+        pane().filter = "file-11"
+        tryVerify(function () { return pane().rows.length === 100 }, 2000)
+        pane().filter = ""
+        tryVerify(function () { return pane().rows.length === 400 }, 2000)
+        wait(100)
+        compare(list.originY, 0, "replacing every row starts the list afresh")
+        list.positionViewAtBeginning()
+        wait(100)
+        compare(list.indexAt(10, list.contentY + 5), 0, "the first row shows at the top")
+        mock.files = saved
+        pane().refresh()
+        waitRows()
       }
 
       function test_zz_done() {

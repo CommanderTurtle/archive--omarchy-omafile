@@ -63,38 +63,7 @@ QtObject {
   property var watchCallback: null
   function watchDirectory(path, onChanged) { watchCallback = onChanged; return 3 }
   function unwatch() {}
-  function cancel(id) { record("cancel", [id]) }
-  property var textFiles: ({})
-  property var writeResult: null
-  function readText(path, onDone, onError) {
-    record("readText", [path])
-    var file = textFiles[path]
-    Qt.callLater(function () {
-      if (!file) { if (onError) onError({ code: "EBINARY", message: "this is not a text file" }); return }
-      onDone({ t: "text", text: file.text, path: path, crlf: file.crlf === true, bom: file.bom === true,
-        writable: file.writable !== false, ino: "1", dev: "2", mtimeNs: "3", size: file.text.length })
-    })
-    return 0
-  }
-  function writeText(path, text, expect, force, crlf, bom, onDone, onError) {
-    record("writeText", [path, text, expect, force, crlf, bom])
-    Qt.callLater(function () {
-      if (mock.writeResult && mock.writeResult.code && !force) { if (onError) onError(mock.writeResult); return }
-      if (onDone) onDone({ path: path, ino: "1", dev: "2", mtimeNs: "9", size: text.length })
-    })
-    return 0
-  }
-  property var duplicateResult: null
-  function findDuplicates(root, path, hidden, onProgress, onDone, onError) {
-    record("findDuplicates", [root, path, hidden])
-    if (duplicateResult && duplicateResult.pending) return 77
-    Qt.callLater(function () {
-      onProgress({ phase: "looking", files: 10, current: root, done: 0, total: 0 })
-      if (mock.duplicateResult && mock.duplicateResult.error) onError(mock.duplicateResult.error)
-      else onDone(mock.duplicateResult || { groups: [], scanned: 10 })
-    })
-    return 77
-  }
+  function cancel() {}
   function noteRecent() {}
   function trashFilesPath() { return "/tmp/.trash" }
   function driveHidden() { return false }
@@ -190,45 +159,12 @@ QtObject {
   function runCommandOn(text, path) { record("runCommandOn", [text, path]); return true }
   function openExternally(path) { record("openExternally", [path]) }
   function openExternallyFiles(paths) { record("openExternallyFiles", [paths]) }
-  function appCommand(app) {
-    var exec = Model.tokenizeCommand(String((app && app.execString) || ""))
-    return exec.length > 0 ? exec : Array.prototype.slice.call((app && app.command) || [])
-  }
   property bool agentAvailable: false
   property string agentName: "Claude Code"
-  property string omarchyEditor: "nvim"
-  property string omarchyAgent: ""
-  property bool omarchyAgentFound: false
-  property bool claudeAvailable: false
-  property var programsFound: ({ code: true, nvim: true, nano: true })
-  readonly property var editorApps: Model.knownEditors.filter(function (e) { return mock.programsFound[e.id] === true })
-  readonly property string editorChoice: String(settingNow("editorChoice", "") || "")
-  readonly property string editorCommand: String(settingNow("editor", "") || "").trim()
-  property var missingPrograms: ({})
-  function refreshDefaults() { record("refreshDefaults", []); return 0 }
-  function checkProgram(command, onResult) {
-    var program = Model.commandProgram(command)
-    record("checkProgram", [program])
-    Qt.callLater(function () { onResult(program !== "" && mock.missingPrograms[program] !== true) })
-    return 0
-  }
-  function editorPlan(onPlan) {
-    if (editorChoice === "omarchy" || editorChoice === "omafile") { onPlan({ mode: editorChoice }); return }
-    var command = editorCommand
-    if (!command) { onPlan({ ask: true, error: "" }); return }
-    checkProgram(command, function (found) { onPlan(found ? { mode: "own", command: command } : { ask: true, error: command }) })
-  }
-  function launchEditor(plan, paths) { record("launchEditor", [plan, paths]) }
-  function setOmarchyEditor(id) { record("setOmarchyEditor", [id]); omarchyEditor = id; return true }
+  function openEditor(path) { record("openEditor", [path]) }
   function openAgent(path) { record("openAgent", [path]) }
   property var compressResult: null
   function makeDirectory(path, onDone, onError) { record("makeDirectory", [path]); if (onDone) onDone({}) }
-  property var transcodeResult: null
-  function transcodePaths(paths, format, resolution, onDone, onError) {
-    record("transcodePaths", [paths, format, resolution])
-    if (transcodeResult && transcodeResult.error) { if (onError) onError({ message: transcodeResult.error, code: transcodeResult.code }) }
-    else if (onDone) onDone({ outputs: paths.map(function (p) { return p.replace(/\.[^.\/]+$/, "-" + resolution + "." + format) }), failures: [] })
-  }
   function compressPaths(paths, name, onDone, onError) {
     record("compressPaths", [paths, name])
     if (compressResult && compressResult.error) { if (onError) onError({ message: compressResult.error, code: compressResult.code }) }
@@ -241,13 +177,7 @@ QtObject {
     if (out && out.error) { if (onError) onError({ message: out.error }) }
     else if (onDone) onDone({ path: out ? out.path : path.replace(/\.zip$/, "") })
   }
-  property string thumbResult: ""
-  property var thumbResults: ({})
-  function thumbnailFor(path, mtime, bucket, onReady) {
-    record("thumbnailFor", [path, mtime, bucket])
-    onReady(thumbResults[bucket] !== undefined ? thumbResults[bucket] : thumbResult)
-    return null
-  }
+  function thumbnailFor(path, mtime, bucket, onReady) { record("thumbnailFor", [path, mtime, bucket]); onReady(""); return null }
   function releaseThumbnail(ticket) {}
   function finishPick(result, request) { record("finishPick", [result, request]); pickRequest = null }
   property var systemClipboard: null

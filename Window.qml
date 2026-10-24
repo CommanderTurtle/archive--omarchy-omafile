@@ -31,10 +31,6 @@ Item {
   readonly property var pickRequest: service ? service.pickRequest : null
   property var pickerShown: null
 
-  function trace(event, fields) {
-    if (service && typeof service.trace === "function") service.trace(event, fields)
-  }
-
   onPickRequestChanged: {
     pickerShown = null
     if (!pickRequest) return
@@ -105,7 +101,6 @@ Item {
   }
 
   function closeWindow(slot) {
-    trace("window-close", { slot: slot, closingFromHost: closingFromHost, switchingSurface: switchingSurface })
     var index = windowSlots.indexOf(slot)
     if (index < 0) return
     var next = windowSlots.slice()
@@ -146,7 +141,6 @@ Item {
   }
 
   function close() {
-    trace("host-close", { slots: windowSlots.length, popup: asPopup })
     closingFromHost = true
     shown = false
     setSlots([])
@@ -155,7 +149,6 @@ Item {
   }
 
   function requestClose() {
-    trace("hide-request", { slots: windowSlots.length, popup: asPopup })
     if (shell && typeof shell.hide === "function") shell.hide(pluginId)
     else close()
   }
@@ -213,16 +206,12 @@ Item {
       minimumSize: Qt.size(640, 420)
 
       onVisibleChanged: {
-        host.trace("window-visible", { slot: slot, visible: visible })
         if (visible) return
         if (host.closingFromHost || host.switchingSurface || host.asPopup) return
         host.closeWindow(slot)
       }
 
-      Component.onDestruction: {
-        host.trace("window-destroyed", { slot: slot })
-        delete host.browsers[slot]
-      }
+      Component.onDestruction: delete host.browsers[slot]
 
       Loader {
         anchors.fill: parent

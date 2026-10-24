@@ -2267,71 +2267,10 @@ PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 PIXEL_CHUNKS = frozenset([b"IHDR", b"PLTE", b"tRNS", b"IDAT", b"IEND", b"gAMA", b"sRGB", b"cHRM", b"sBIT"])
 THUMB_TEXT_LIMIT = 16384
 THUMB_MAX_SIDE = max(size for _, size in THUMB_BUCKETS)
-PREVIEW_KEEP = 500
-PREVIEW_CACHE_BYTES = 2 << 30
-PREVIEW_TIMEOUT = 90.0
-PNG_SMALL_CHUNK = 65536
 
 def thumb_root():
     base = os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache")
     return os.path.join(base, "thumbnails")
-
-def preview_root():
-    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache")
-    return os.path.join(base, "omafile", "previews")
-
-def png_read_limit(side):
-    return side * side * 8 + (1 << 20)
-
-def preview_side(bucket):
-    match = re.fullmatch(r"preview-([1-9][0-9]*)", bucket) if isinstance(bucket, str) else None
-    return int(match[1]) if match else 0
-
-def thumb_place(root, bucket):
-    side = preview_side(bucket)
-    if side:
-        return os.path.join(preview_root(), str(side)), side, png_read_limit(side)
-    return os.path.join(root, bucket), THUMB_BUCKET_SIZES[bucket], THUMB_MAX_READ
-
-def prune_previews(root, keep=PREVIEW_KEEP, budget=PREVIEW_CACHE_BYTES):
-    files = []
-    try:
-        entries = os.listdir(root)
-    except OSError:
-        return
-    for entry in entries:
-        path = os.path.join(root, entry)
-        if entry.endswith(".png"):
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
-            continue
-        if not re.fullmatch(r"[1-9][0-9]*", entry):
-            continue
-        try:
-            names = os.listdir(path)
-        except OSError:
-            continue
-        for name in names:
-            if not name.endswith(".png") or name.startswith("."):
-                continue
-            try:
-                st = os.lstat(os.path.join(path, name))
-            except OSError:
-                continue
-            if stat.S_ISREG(st.st_mode):
-                files.append((st.st_mtime, st.st_size, os.path.join(path, name)))
-    files.sort(reverse=True)
-    total = 0
-    for index, (_, size, path) in enumerate(files):
-        total += size
-        if index < keep and total <= budget:
-            continue
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
 
 def thumb_uri(path_bytes):
     return "file://" + urllib.parse.quote(path_bytes, safe=THUMB_URI_SAFE)
@@ -2499,38 +2438,9 @@ def png_chunks(data):
             return chunks
     return None
 
-def png_scan(f, max_read):
-    size = os.fstat(f.fileno()).st_size
-    if size > max_read or f.read(8) != PNG_MAGIC:
-        return None
-    chunks = []
-    pos = 8
-    while pos + 12 <= size:
-        f.seek(pos)
-        header = f.read(8)
-        if len(header) != 8:
-            return None
-        length, kind = struct.unpack(">I4s", header)
-        end = pos + 12 + length
-        if end > size:
-            return None
-        if kind == b"tEXt" and length > THUMB_TEXT_LIMIT:
-            return None
-        body = b""
-        if kind != b"IDAT" and length <= PNG_SMALL_CHUNK:
-            body = f.read(length)
-            if len(body) != length:
-                return None
-        chunks.append((kind, body, pos + 8, length))
-        pos = end
-        if kind == b"IEND":
-            return chunks
-    return None
-
 def png_text(chunks):
     out = {}
-    for chunk in chunks:
-        kind, body = chunk[0], chunk[1]
+    for kind, body in chunks:
         if kind == b"tEXt" and b"\0" in body:
             key, value = body.split(b"\0", 1)
             out[key.decode("latin-1")] = value.decode("latin-1")
@@ -2546,8 +2456,7 @@ def safe_thumb(chunks, max_side=THUMB_MAX_SIDE):
     if size is None or not (0 < size[0] <= max_side and 0 < size[1] <= max_side):
         return False
     text = 0
-    for chunk in chunks:
-        kind, body = chunk[0], chunk[1]
+    for kind, body in chunks:
         if kind == b"tEXt":
             text += len(body)
         elif kind not in PIXEL_CHUNKS:
@@ -2566,13 +2475,15 @@ def blank_png():
     pixels = zlib.compress(b"\x00\x00\x00\x00\x00")
     return [(b"IHDR", header), (b"IDAT", pixels), (b"IEND", b"")]
 
-def thumb_matches(path, uri, mtime, max_side=THUMB_MAX_SIDE, max_read=THUMB_MAX_READ):
+def thumb_matches(path, uri, mtime):
     try:
-        with open(path, "rb", buffering=1 << 16) as f:
-            chunks = png_scan(f, max_read)
+        if os.path.getsize(path) > THUMB_MAX_READ:
+            return False
+        with open(path, "rb") as f:
+            chunks = png_chunks(f.read())
     except OSError:
         return False
-    if not chunks or not safe_thumb(chunks, max_side):
+    if not chunks or not safe_thumb(chunks):
         return False
     meta = png_text(chunks)
     if meta.get("Thumb::URI") != uri:
@@ -2583,16 +2494,6 @@ def thumb_matches(path, uri, mtime, max_side=THUMB_MAX_SIDE, max_read=THUMB_MAX_
         return False
 
 def find_thumb(root, name, uri, mtime, bucket):
-    if preview_side(bucket):
-        folder, side, limit = thumb_place(root, bucket)
-        candidate = os.path.join(folder, name)
-        if not thumb_matches(candidate, uri, mtime, side, limit):
-            return None
-        try:
-            os.utime(candidate)
-        except OSError:
-            pass
-        return candidate
     start = [b for b, _ in THUMB_BUCKETS].index(bucket)
     for folder, _ in THUMB_BUCKETS[start:]:
         candidate = os.path.join(root, folder, name)
@@ -2635,47 +2536,6 @@ def write_png(path, chunks, fields):
             pass
         raise
 
-def copy_png_chunk(out, src, kind, body, offset, length):
-    out.write(struct.pack(">I", length) + kind)
-    crc = zlib.crc32(kind)
-    if len(body) == length:
-        out.write(body)
-        crc = zlib.crc32(body, crc)
-    else:
-        src.seek(offset)
-        left = length
-        while left > 0:
-            piece = src.read(min(left, 1 << 20))
-            if not piece:
-                raise OSError(errno.EIO, "the thumbnail ended early")
-            out.write(piece)
-            crc = zlib.crc32(piece, crc)
-            left -= len(piece)
-    out.write(struct.pack(">I", crc & 0xffffffff))
-
-def write_png_from(path, src, chunks, fields):
-    folder = os.path.dirname(path)
-    private_makedirs(folder)
-    kept = [c for c in chunks if c[0] in PIXEL_CHUNKS]
-    text = []
-    for k, v in fields.items():
-        body = k.encode("latin-1") + b"\0" + v.encode("latin-1", errors="replace")
-        text.append((b"tEXt", body, 0, len(body)))
-    fd, tmp = tempfile.mkstemp(prefix=".omafile-", suffix=".png", dir=folder)
-    try:
-        with os.fdopen(fd, "wb", buffering=1 << 20) as out:
-            out.write(PNG_MAGIC)
-            for kind, body, offset, length in kept[:1] + text + kept[1:]:
-                copy_png_chunk(out, src, kind, body, offset, length)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
-    except OSError:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
 def expand_thumb_command(command, path, uri, out, size):
     try:
         args = shlex.split(command)
@@ -2696,7 +2556,7 @@ def expand_thumb_command(command, path, uri, out, size):
         result.append("".join(piece))
     return result
 
-def run_thumbnailer(args, cancel_event, timeout=THUMB_TIMEOUT):
+def run_thumbnailer(args, cancel_event):
     try:
         program = thumbnail_program(args[0])
         proc = subprocess.Popen([program] + args[1:], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -2707,7 +2567,7 @@ def run_thumbnailer(args, cancel_event, timeout=THUMB_TIMEOUT):
         os.setpriority(os.PRIO_PROCESS, proc.pid, 10)
     except OSError:
         pass
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + THUMB_TIMEOUT
     while True:
         try:
             code = proc.wait(timeout=0.2)
@@ -2728,7 +2588,8 @@ def acquire_thumb_worker(cancel_event):
     return False
 
 def generate_thumb(root, name, src, uri, st, bucket, command, mime, cancel_event):
-    folder, size, max_read = thumb_place(root, bucket)
+    size = THUMB_BUCKET_SIZES[bucket]
+    folder = os.path.join(root, bucket)
     private_makedirs(folder)
     fd, out = tempfile.mkstemp(prefix=".omafile-", suffix=".png", dir=folder)
     os.close(fd)
@@ -2736,22 +2597,20 @@ def generate_thumb(root, name, src, uri, st, bucket, command, mime, cancel_event
         args = expand_thumb_command(command, to_str(src), uri, out, size)
         if not args:
             return "failed"
-        status = run_thumbnailer(args, cancel_event, PREVIEW_TIMEOUT if preview_side(bucket) else THUMB_TIMEOUT)
+        status = run_thumbnailer(args, cancel_event)
         if status != "ok":
             return status
+        try:
+            with open(out, "rb") as f:
+                chunks = png_chunks(f.read(THUMB_MAX_READ))
+        except OSError:
+            chunks = None
+        if not chunks or png_size(chunks) is None or max(png_size(chunks)) > THUMB_MAX_SIDE:
+            return "failed"
         fields = {"Thumb::URI": uri, "Thumb::MTime": str(int(st.st_mtime)),
                   "Thumb::Size": str(st.st_size), "Thumb::Mimetype": mime,
                   "Software": "Omafile " + VERSION}
-        try:
-            with open(out, "rb", buffering=1 << 16) as f:
-                chunks = png_scan(f, max_read)
-                if not chunks or png_size(chunks) is None or max(png_size(chunks)) > size:
-                    return "failed"
-                write_png_from(os.path.join(folder, name), f, chunks, fields)
-        except FileNotFoundError:
-            return "failed"
-        if preview_side(bucket):
-            prune_previews(preview_root())
+        write_png(os.path.join(folder, name), chunks, fields)
         return "ok"
     finally:
         try:
@@ -2763,7 +2622,7 @@ def op_thumb(req, cancel_event):
     req_id = req["id"]
     path = req.get("path")
     bucket = req.get("size")
-    if bucket not in THUMB_BUCKET_SIZES and not preview_side(bucket) and bucket != "preview-original":
+    if bucket not in THUMB_BUCKET_SIZES:
         bucket = "large"
     if not isinstance(path, str) or not path.startswith("/"):
         send_error(req_id, "EINVAL", "absolute path required")
@@ -2777,15 +2636,9 @@ def op_thumb(req, cancel_event):
     if not stat.S_ISREG(st.st_mode):
         send_error(req_id, "EINVAL", "not a regular file", path)
         return
-    if bucket == "preview-original":
-        size = image_dimensions(path)
-        if not size:
-            send_error(req_id, "ENODATA", "no image dimensions found", path)
-            return
-        bucket = "preview-%d" % max(size)
     root = thumb_root()
     real = os.path.realpath(src)
-    if real.startswith(to_bytes(root) + b"/") or real.startswith(to_bytes(preview_root()) + b"/"):
+    if real.startswith(to_bytes(root) + b"/"):
         send_error(req_id, "EUNSUPPORTED", "file is inside the thumbnail cache", path)
         return
     uri = thumb_uri(src)
@@ -2818,7 +2671,7 @@ def op_thumb(req, cancel_event):
                 if status == "cancelled":
                     send_error(req_id, "ECANCELED", "cancelled")
                     return
-                if status == "failed" and not preview_side(bucket):
+                if status == "failed":
                     try:
                         marker = os.path.join(root, "fail", "omafile-" + VERSION, name)
                         write_png(marker, blank_png(), {"Thumb::URI": uri, "Thumb::MTime": str(mtime),
@@ -2828,7 +2681,7 @@ def op_thumb(req, cancel_event):
                 if status != "ok":
                     send_error(req_id, "EUNSUPPORTED", "thumbnailer " + status, path)
                     return
-                found = os.path.join(thumb_place(root, bucket)[0], name)
+                found = os.path.join(root, bucket, name)
     emit({"id": req_id, "t": "thumb", "thumb": found})
     send_done(req_id)
 
@@ -4578,23 +4431,6 @@ TRANSCODE_QUALITIES = ("high", "medium", "low")
 TRANSCODE_RESOLUTIONS = ("high", "medium", "low", "4k", "1080p", "720p")
 
 
-def transcode_output_path(path, fmt, quality, resolution):
-    """Mirror the patched CLI's explicit axes, not its interactive choices."""
-    stem, ext = os.path.splitext(path)
-    source_format = ext[1:]
-    video = source_format.lower() in ("mp4", "m4v", "mov", "mkv", "webm", "avi")
-    if not fmt:
-        fmt = {"jpeg": "jpg", "m4v": "mp4"}.get(source_format.lower(), source_format.lower())
-        supported = ("mp4", "gif") if video else ("jpg", "png", "webp", "avif")
-        if fmt not in supported:
-            # The native CLI asks for a format; do not invent its answer.
-            return ""
-    suffix = "-".join(p for p in (resolution, "" if video else quality) if p)
-    if not suffix and source_format == fmt:
-        suffix = "re"
-    return stem + ("-" + suffix if suffix else "") + "." + fmt
-
-
 def op_transcode(req, cancel_event):
     req_id = req["id"]
     paths = req.get("paths")
@@ -4615,7 +4451,7 @@ def op_transcode(req, cancel_event):
                    "4k, 1080p, 720p, or a pixel width)")
         return
     try:
-        program = trusted_program("omarchy-transcode")
+        trusted_program("omarchy-transcode")
     except FileNotFoundError:
         send_error(req_id, "EUNSUPPORTED", "omarchy-transcode is not installed")
         return
@@ -4630,32 +4466,24 @@ def op_transcode(req, cancel_event):
             return
         emit({"id": req_id, "t": "progress", "files": index, "filesTotal": len(paths),
               "current": os.path.basename(path)})
-        # wl-copy may outlive the CLI. Give it a file, never captured pipes.
+        # The CLI copies its result to the clipboard, which forks a persistent
+        # wl-copy daemon. Running it directly would leave the daemon holding
+        # this helper's stdout/stderr pipes open, so run it through bash with
+        # its stdio redirected to a temp file; the daemon inherits the file
+        # descriptors, not the pipes.
         errfd, errfile = tempfile.mkstemp(prefix=".omafile-transcode-")
-        proc = None
+        os.close(errfd)
         try:
-            with os.fdopen(errfd, "wb") as log:
-                proc = subprocess.Popen([program, path, fmt, qual, res], stdin=subprocess.DEVNULL,
-                                        stdout=log, stderr=log, env=trusted_env(), start_new_session=True)
-                deadline = time.monotonic() + 600
-                while proc.poll() is None:
-                    if cancel_event is not None and cancel_event.wait(0.1):
-                        kill_process_group(proc)
-                        send_error(req_id, "ECANCELED", "cancelled", path)
-                        return
-                    if time.monotonic() >= deadline:
-                        kill_process_group(proc)
-                        send_error(req_id, "ETIMEDOUT", "transcode timed out", path)
-                        return
-                    if cancel_event is None:
-                        time.sleep(0.1)
-            with open(errfile, "r", encoding="utf-8", errors="replace") as fh:
-                # Encoder diagnostics can be large; preserve the useful tail.
-                fh.seek(max(0, os.path.getsize(errfile) - 65536))
-                message = fh.read().strip()
+            proc = run_trusted("bash", ["-c",
+                "exec omarchy-transcode \"$1\" \"$2\" \"$3\" \"$4\" >\"$5\" 2>&1",
+                "omafile-transcode", path, fmt, qual, res, errfile], timeout=600)
+            message = ""
+            try:
+                with open(errfile, "r", encoding="utf-8", errors="replace") as fh:
+                    message = fh.read().strip()
+            except OSError:
+                pass
         finally:
-            if proc is not None and proc.poll() is None:
-                kill_process_group(proc)
             try:
                 os.unlink(errfile)
             except OSError:
@@ -4666,10 +4494,15 @@ def op_transcode(req, cancel_event):
         if proc.returncode != 0:
             send_error(req_id, "ETRANSCODE", message or "transcode failed", path)
             return
-        output = transcode_output_path(path, fmt, qual, res)
-        if output and os.path.isfile(output):
-            outputs.append(output)
-    send_done(req_id, outputs=outputs, files=len(paths))
+        stem = os.path.splitext(os.path.basename(path))[0]
+        # Mirror the CLI: stamp only what was forced (resolution and/or quality).
+        parts = [stem]
+        if res:
+            parts.append(res)
+        if qual:
+            parts.append(qual)
+        outputs.append(os.path.join(os.path.dirname(path), "-".join(parts) + "." + fmt))
+    send_done(req_id, outputs=outputs)
 
 LNKR_VARIANTS = ("v1", "v2", "v3", "v4")
 LNKR_MODES = ("rich", "safe", "make")
@@ -4696,17 +4529,6 @@ def lnkr_binary_candidates():
     return candidates
 
 
-def image_dimensions(path):
-    data = run_tool(["ffprobe", "-v", "error", "-select_streams", "v:0",
-                     "-show_entries", "stream=width,height", "-of", "json", path])
-    try:
-        stream = data["streams"][0]
-        width, height = int(stream.get("width") or 0), int(stream.get("height") or 0)
-    except (KeyError, IndexError, TypeError, ValueError):
-        return None
-    return (width, height) if width > 0 and height > 0 else None
-
-
 def op_imagedims(req):
     req_id = req["id"]
     path = req.get("path")
@@ -4718,11 +4540,19 @@ def op_imagedims(req):
     except FileNotFoundError:
         send_error(req_id, "EUNSUPPORTED", "ffprobe is not installed")
         return
-    size = image_dimensions(path)
-    if not size:
+    data = run_tool(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                     "-show_entries", "stream=width,height", "-of", "json", path])
+    try:
+        stream = data["streams"][0]
+        width = int(stream.get("width") or 0)
+        height = int(stream.get("height") or 0)
+    except (KeyError, IndexError, TypeError, ValueError):
         send_error(req_id, "ENODATA", "no image dimensions found", path)
         return
-    send_done(req_id, width=size[0], height=size[1])
+    if width <= 0 or height <= 0:
+        send_error(req_id, "ENODATA", "no image dimensions found", path)
+        return
+    send_done(req_id, width=width, height=height)
 
 def op_lnkrresolve(req):
     req_id = req["id"]
@@ -4783,14 +4613,27 @@ def op_lnkrclipboard(req):
          send_error(req_id, "EINVAL", "text required")
          return
      try:
-         subprocess.run([trusted_program("wl-copy")], input=text.encode(), env=trusted_env(),
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=True)
+         subprocess.run(["wl-copy"], input=text.encode(),
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
      except Exception as e:
          send_error(req_id, "EINTERNAL", str(e))
          return
      send_done(req_id)
 
 
+def op_lnkrkill(req):
+     req_id = req["id"]
+     try:
+         subprocess.run(["pkill", "-f", "encode-worker.js"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+         import glob
+         for f in glob.glob(os.path.expanduser("~/Documents/Dev/linkoder/.encode-worker-*")):
+             try: os.unlink(f)
+             except OSError: pass
+     except Exception as e:
+         send_error(req_id, "EINTERNAL", str(e))
+         return
+     send_done(req_id)
 CANCELLABLE_OPS = {
     "list": op_list,
     "search": op_search,
@@ -4853,6 +4696,7 @@ SIMPLE_OPS = {
     "lnkrresolve": op_lnkrresolve,
     "lnkreencode": op_lnkreencode,
     "lnkrclipboard": op_lnkrclipboard,
+     "lnkrkill": op_lnkrkill,
 }
 
 def dispatch(req):

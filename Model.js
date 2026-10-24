@@ -994,17 +994,7 @@ function isImageName(name) {
   return !!imageExtSet[extOf(String(name || ''))];
 }
 
-var previewSides = [1024, 2048, 4096, 7680, 8192];
-var autoPreviewMax = 4096;
-
-function previewSide(choice, screenPixels) {
-  var fixed = Number(choice);
-  if (previewSides.indexOf(fixed) >= 0) return fixed;
-  var need = Number(screenPixels) || 0;
-  for (var i = 0; i < previewSides.length; i++)
-    if (previewSides[i] >= need || previewSides[i] >= autoPreviewMax) return previewSides[i];
-  return autoPreviewMax;
-}
+var imagePreviewLimit = 64 * 1024 * 1024;
 
 function previewKind(entry) {
   if (!entry) return 'none';
@@ -1012,7 +1002,7 @@ function previewKind(entry) {
   if (entry.isBroken) return 'none';
   if (entry.kind !== 'f' && entry.kind !== 'l') return 'none';
   var ext = String(entry.ext || '').toLowerCase();
-  if (imageExtSet[ext]) return 'image';
+  if (imageExtSet[ext]) return (Number(entry.size) || 0) > imagePreviewLimit ? 'none' : 'image';
   if (audioExtSet[ext]) return 'audio';
   return 'text';
 }

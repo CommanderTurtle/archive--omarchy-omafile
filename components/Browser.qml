@@ -1192,7 +1192,7 @@ Item {
     if (transcodeIsVideo)
       service.transcodePaths(paths, transcodeFormat, transcodeResolution, function (m) {
         var outputs = m.outputs || []
-        root.statusText = "Transcoded " + Model.formatCount(Number(m.files) || outputs.length, "file", "files")
+        root.statusText = "Transcoded " + Model.formatCount(outputs.length, "file", "files")
         p.refresh()
         if (outputs.length === 1) {
           selectTimer.pendingName = Model.basename(String(outputs[0]))
@@ -1214,7 +1214,7 @@ Item {
       else if (transcodeAxis === "resolution") { f = ""; q = "" }
       service.transcodeQualityPaths(paths, f, q, r, function (m) {
         var outputs = m.outputs || []
-        root.statusText = "Transcoded " + Model.formatCount(Number(m.files) || outputs.length, "file", "files")
+        root.statusText = "Transcoded " + Model.formatCount(outputs.length, "file", "files")
         p.refresh()
         if (outputs.length === 1) {
           selectTimer.pendingName = Model.basename(String(outputs[0]))
@@ -1664,16 +1664,20 @@ Item {
       go()
     }
   }
+  function lnkrKill() {
+    service.request({ op: "lnkrkill" }, {})
+  }
   function lnkrOpen(url, mode) {
     if (url.length > 120000) {
       service.request({ op: "lnkrclipboard", text: url }, {
-        onDone: function () { statusText = "Ln.kr: " + mode + " copied" },
+        onDone: function () { statusText = "Ln.kr: " + mode + " copied"; lnkrKill() },
         onError: function (msg) { statusText = "Ln.kr: " + (typeof msg === "string" ? msg : "clipboard failed") }
       })
       return
     }
     Quickshell.execDetached(["/bin/sh", "-c", "WS=$(hyprctl activeworkspace 2>/dev/null | awk '{print $2}'); H=$(hyprctl windows 2>/dev/null | grep -i helium | grep -c \"$WS\" 2>/dev/null); if [ \"${H:-0}\" -gt 0 ]; then exec helium-browser \"$1\"; else exec helium-browser --new-window \"$1\"; fi", "_", url])
     statusText = "Ln.kr: " + mode + " opened"
+    lnkrKill()
   }
   function runLnkr(mode, copyOnly) {
     var entry = menuEntry
@@ -1704,7 +1708,7 @@ Item {
   property real previewZoom: 1
   property real previewPanX: 0
   property real previewPanY: 0
-  onPreviewEntryChanged: {
+  function onPreviewEntryChanged() {
     previewZoom = 1
     previewPanX = 0
     previewPanY = 0
@@ -1730,8 +1734,6 @@ Item {
   }
 
   readonly property bool fullResPreview: boolSetting("fullResPreview", false)
-  readonly property int previewSide: Model.previewSide("auto",
-    Math.max(previewBody.width, previewBody.height) * Screen.devicePixelRatio)
 
   function showPreview(entry) {
     if (!entry) return
@@ -3379,21 +3381,19 @@ Item {
             active: root.previewOpen && root.previewKind === "image" && !root.fullResPreview
             entry: active ? root.previewEntry : null
             generated: active && root.previewThumbable()
-            requestSize: root.previewSide
-            sourceSize.width: requestSize
-            sourceSize.height: requestSize
-            cache: requestSize <= 1024
+            requestSize: 1024
+            sourceSize.width: Math.max(1, previewBody.width * 2)
+            sourceSize.height: Math.max(1, previewBody.height * 2)
           }
 
-          ThumbImage {
+          Image {
             id: previewFullImage
             objectName: "previewFullImage"
             anchors.fill: parent
-            service: root.service
-            active: root.previewOpen && root.previewKind === "image" && root.fullResPreview
-            entry: active ? root.previewEntry : null
-            generated: active && root.previewThumbable()
-            original: true
+            visible: root.previewOpen && root.previewKind === "image" && root.fullResPreview && root.previewEntry !== null
+            source: visible ? Util.fileUrl(String(root.previewEntry.path)) : ""
+            fillMode: Image.PreserveAspectFit
+            asynchronous: true
             cache: false
             smooth: true
             transform: [
@@ -3479,8 +3479,8 @@ Item {
               textFormat: Text.PlainText
               anchors.horizontalCenter: parent.horizontalCenter
               text: root.previewLoading ? "Reading"
-                : (root.previewKind === "image" && root.fullResPreview && !previewFullImage.failed && root.previewThumbable() ? "Making a preview"
-                : (root.previewKind === "image" && !root.fullResPreview && !previewImage.failed && root.previewThumbable() ? "Making a preview"
+                : (root.previewKind === "image" && root.fullResPreview && previewFullImage.status !== Image.Ready ? "Loading"
+                : (root.previewKind === "image" && !previewImage.failed && root.previewThumbable() ? "Making a preview"
                 : (root.previewKind === "image" ? "No preview for this image. Turn on Previews and thumbnails, or install a thumbnailer for it"
                 : (root.previewKind === "folder" ? "Folder. Press Enter to open it."
                   : (root.previewKind === "remoteaudio" ? "Audio preview is off for network folders. Press Enter to open it."
@@ -4685,7 +4685,7 @@ Item {
       { key: "thumbnails", label: "Previews and thumbnails",
         description: "Show images, video frames and document pages instead of a generic icon" },
       { key: "fullResPreview", label: "Full-resolution image previews", fallback: false,
-        description: "Make an isolated original-size preview, including 8192 px and larger images" },
+        description: "Preview images at their original size instead of the 1024 px thumbnail" },
       { key: "rememberFolderViews", label: "Remember the view for each folder",
         description: "A folder opens in the view you last picked there. Other folders open in the default view" },
       { key: "extractOnOpen", label: "Extract archives when opened", fallback: false,

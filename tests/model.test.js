@@ -763,7 +763,7 @@ test('previewKind only previews regular files and links to them', function () {
   assert.equal(Model.previewKind(Model.decodeEntry(['pic.png', 'o', 0, 0, 0, '/dev/zero'], '/tmp')), 'none');
   assert.equal(Model.previewKind(Model.decodeEntry(['notes.txt', 'o', 0, 0, 0, null], '/tmp')), 'none');
   assert.equal(Model.previewKind(Model.decodeEntry(['song.mp3', 'l', 10, 0, 0, '/music/a.mp3'], '/tmp')), 'audio');
-  assert.equal(Model.previewKind(Model.decodeEntry(['huge.png', 'f', 65 * 1024 * 1024, 0, 0, null], '/tmp')), 'image');
+  assert.equal(Model.previewKind(Model.decodeEntry(['huge.png', 'f', 65 * 1024 * 1024, 0, 0, null], '/tmp')), 'none');
 });
 
 test('glob matching stays fast on hostile patterns', function () {

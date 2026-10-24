@@ -25,11 +25,6 @@ Item {
   property int helperRestarts: 0
   property bool helperGaveUp: false
   readonly property int helperRestartLimit: 8
-  readonly property bool traceEnabled: Quickshell.env("OMAFILE_TRACE") === "1"
-
-  function trace(event, fields) {
-    if (traceEnabled) console.warn("[omafile] " + event + " " + JSON.stringify(fields || {}))
-  }
 
   property var transfers: []
   property var clipboard: ({ mode: "", paths: [] })
@@ -206,7 +201,6 @@ Item {
   }
 
   function handleHelperExit() {
-    if (root.traceEnabled) root.trace("helper-exit", { activeTransfers: activeTransfers, pending: pendingSummary() })
     helperReady = false
     if (_bookmarkReadPending || _bookmarkWritePending)
       bookmarksError = "Bookmarks could not be synced: file helper stopped. Local bookmarks are saved."
@@ -630,7 +624,6 @@ Item {
       },
       onDone: function (m) {
         delete root._transferOwners[m.id]
-        if (root.traceEnabled) root.trace("transfer-done", { id: m.id, copied: m.copied, skipped: m.skipped })
         updateTransfer(m.id, {
           state: "done", errors: m.errors || [],
           copied: Number(m.copied) || 0, skipped: Number(m.skipped) || 0
@@ -647,14 +640,12 @@ Item {
       },
       onError: function (m) {
         delete root._transferOwners[m.id]
-        if (root.traceEnabled) root.trace("transfer-error", { id: m.id, code: m.code })
         updateTransfer(m.id, { state: m.code === "ECANCELED" ? "cancelled" : "failed", message: String(m.message || "") })
         trimTransferHistory()
       }
     })
     if (owner) _transferOwners[id] = owner
     record.id = id
-    if (root.traceEnabled) root.trace("transfer-start", { id: id, op: op, count: sources.length })
     var next = transfers.slice()
     next.push(record)
     transfers = next

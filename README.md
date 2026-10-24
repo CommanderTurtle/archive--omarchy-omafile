@@ -8,7 +8,7 @@ A lightweight, fast file manager plugin for Omarchy running in the shell.
 * Dual pane layout with one-key copy and move between panes
 * List, compact, grid and gallery views, with zoom from Ctrl+Scroll or the View menu
 * Sort from the View menu in any view: A to Z, Z to A, last modified, size or type
-* Quick preview with Space: screen-sized or original-size images, text files such as `.yml` as plain text, and audio files play with a seek bar, cover art and volume
+* Quick preview with Space: images up to 1024 px, text files such as `.yml` as plain text, and audio files play with a seek bar, cover art and volume
 * Mouse back and forward buttons move through folder history
 * Can stand in for the GTK file chooser, so browser uploads and downloads open Omafile
 * Live directory watching: external changes appear immediately
@@ -97,7 +97,7 @@ Zoom scales rows, icons and grid cells from 50 to 300 percent. Use the minus and
 
 ### Preview
 
-Press Space on a file to preview it without opening another app. Images use screen-sized previews, up to 4096 px automatically; Full-resolution image previews requests the original dimensions, including 8192 px and larger. Both use sanitized helper output, never the original file in the shell, and follow the Previews and thumbnails setting. Original-size requests remain subject to the decoder and available graphics memory. Text files such as `.yml`, `.json`, `.md` or scripts are shown as text, up to the first 256 KB. Arrow keys move to the next file while the preview stays open. Enter opens the file, and Space or Escape closes the preview. Preview is also in the right click menu.
+Press Space on a file to preview it without opening another app. Images are shown at up to 1024 px, made by your system's thumbnailer rather than decoded inside the shell, so a crafted image cannot weigh the desktop down; image previews follow the Previews and thumbnails setting. Text files such as `.yml`, `.json`, `.md` or scripts are shown as text, up to the first 256 KB. Arrow keys move to the next file while the preview stays open. Enter opens the file, and Space or Escape closes the preview. Preview is also in the right click menu.
 
 Audio files (`.mp3`, `.flac`, `.ogg`, `.opus`, `.m4a`, `.aac`, `.wav`, `.wma`) start playing as soon as the preview opens, with the title, artist, album and cover art when the file has them. Arrow to the next file to hear it instead, which makes it quick to go through a folder of tracks or samples. K or P plays and pauses, Shift+Left and Shift+Right skip 5 seconds, and M mutes. Playback stops when the preview closes. The volume is kept while the window stays open. Playing audio needs Qt Multimedia, which Omarchy already installs alongside Kdenlive. Without it the preview says to install `qt6-multimedia`. The shell plays a copy of the song's audio that Omafile makes with `ffmpeg`, without cover art or tags, so a crafted song cannot reach the shell's media player; the cover comes from the thumbnailer instead.
 

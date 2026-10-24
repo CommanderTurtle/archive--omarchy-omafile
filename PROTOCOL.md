@@ -356,12 +356,6 @@ keep only those pixel chunks from the thumbnailer's output and add the `Thumb::`
 the shell never decodes metadata from a file it was shown. The shell shows images, including
 the full preview, only through this operation.
 
-Large previews use `size: "preview-4096"` (or another positive pixel side), or
-`"preview-original"` to obtain the source dimensions through `ffprobe` without a
-fixed resolution ceiling. They use Omafile's private preview cache, not the shared
-thumbnail cache: 500 files / 2 GB, streamed PNG sanitization, and a 90-second
-thumbnailer deadline. Shared thumbnails retain their existing limits.
-
 On a miss the helper runs the system thumbnailer registered for the file's MIME type in
 `thumbnailers/*.thumbnailer` under `$XDG_DATA_HOME` and `$XDG_DATA_DIRS`, such as
 ffmpegthumbnailer for video or evince-thumbnailer for PDF. At most two run at once, each

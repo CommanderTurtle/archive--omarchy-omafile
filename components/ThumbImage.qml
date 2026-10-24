@@ -10,14 +10,13 @@ Image {
   property bool generated: false
   property bool failed: false
   property int requestSize: 256
-  property bool original: false
 
   property string cachedPath: ""
   property var ticket: null
   property bool started: false
 
-  readonly property string bucket: original ? "preview-original" : (requestSize <= 256 ? "large"
-    : (requestSize <= 512 ? "x-large" : (requestSize <= 1024 ? "xx-large" : "preview-" + requestSize)))
+  readonly property string bucket: requestSize <= 256 ? "large"
+    : (requestSize <= 512 ? "x-large" : "xx-large")
   readonly property string requestKey: active && generated && entry && service
     ? bucket + "|" + entry.mtime + "|" + entry.path : ""
 

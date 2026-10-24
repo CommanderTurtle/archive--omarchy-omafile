@@ -2238,6 +2238,8 @@ ShellRoot {
         compare(browser.transcodeResolution, "low")
         var sizes = findChild(browser, "transcodeSize")
         verify(sizes.options.map(function (o) { return o.value }).indexOf("original") >= 0, "pictures can keep their size")
+        var formats = findChild(browser, "transcodeFormat").options.map(function (o) { return o.value })
+        compare(formats, ["jpg", "png", "webp", "avif"], "pictures can become WebP and AVIF")
         sizes.changed("original")
         mock.calls = []
         browser.submitDialog()

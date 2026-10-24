@@ -4460,7 +4460,7 @@ TRANSCODE_TIMEOUT = 6 * 3600.0
 TRANSCODE_PICTURE_SIZES = {"high": "3160x>", "medium": "2160x>", "low": "1080x>", "original": None}
 TRANSCODE_VIDEO_SIZES = {"4k": 2160, "1080p": 1080, "720p": 720, "original": None}
 TRANSCODE_EVEN_SIZE = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
-TRANSCODE_FORMATS = {"picture": ("jpg", "png"), "video": ("mp4", "gif")}
+TRANSCODE_FORMATS = {"picture": ("jpg", "png", "webp", "avif"), "video": ("mp4", "gif")}
 TRANSCODE_DEMUXERS = "mov,matroska,avi,mpegts,flv,mpeg"
 TRANSCODE_IMAGE_LIMITS = ["-limit", "memory", "1GiB", "-limit", "map", "2GiB", "-limit", "disk", "4GiB",
                           "-limit", "area", "256MP", "-limit", "time", "900"]
@@ -4502,6 +4502,10 @@ def transcode_argv(kind, coder, fmt, resolution, in_fd, out_fd, programs):
             argv += ["-resize", TRANSCODE_PICTURE_SIZES[resolution]]
         if fmt == "jpg":
             return argv + ["-quality", "85", "-strip", "JPEG:" + target]
+        if fmt == "webp":
+            return argv + ["-quality", "82", "-define", "webp:method=6", "-strip", "WEBP:" + target]
+        if fmt == "avif":
+            return argv + ["-quality", "60", "-define", "heic:speed=6", "-strip", "AVIF:" + target]
         return argv + ["-strip", "-define", "png:compression-filter=5", "-define", "png:compression-level=9",
                        "-define", "png:compression-strategy=1", "-define", "png:exclude-chunk=all", "PNG:" + target]
     height = TRANSCODE_VIDEO_SIZES[resolution]
@@ -4573,7 +4577,7 @@ def op_transcode(req, cancel_event):
     fmt = req.get("format")
     resolution = req.get("resolution")
     if (not isinstance(paths, list) or not paths or not all(isinstance(p, str) and os.path.isabs(p) for p in paths)
-            or fmt not in ("jpg", "png", "mp4", "gif")
+            or fmt not in ("jpg", "png", "webp", "avif", "mp4", "gif")
             or resolution not in TRANSCODE_PICTURE_SIZES and resolution not in TRANSCODE_VIDEO_SIZES):
         send_error(req_id, "EINVAL", "absolute paths, a format and a size are required")
         return

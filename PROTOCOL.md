@@ -572,7 +572,7 @@ tool's message. The temporary file is removed on failure.
 {"id": N, "op": "transcode", "paths": ["/home/me/Pictures/a.heic"], "format": "jpg", "resolution": "medium"}
 ```
 
-Cancellable. Every path must be absolute. `format` is `jpg` or `png` for pictures and `mp4` or
+Cancellable. Every path must be absolute. `format` is `jpg`, `png`, `webp` or `avif` for pictures and `mp4` or
 `gif` for videos. `resolution` is `high`, `medium`, `low` or `original` for pictures and `4k`, `1080p`,
 `720p` or `original` for videos. `original` does not resize, except that video sizes are rounded
 down to even numbers. Each file is opened as a handle and recognised by its first bytes;

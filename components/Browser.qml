@@ -1136,7 +1136,8 @@ Item {
   property var transcodeLast: ({})
   readonly property var transcodeChoices: ({
     picture: {
-      formats: [{ label: "JPG, smaller", value: "jpg" }, { label: "PNG, lossless", value: "png" }],
+      formats: [{ label: "JPG, smaller", value: "jpg" }, { label: "PNG, lossless", value: "png" },
+        { label: "WebP, small, keeps transparency", value: "webp" }, { label: "AVIF, smallest, keeps transparency", value: "avif" }],
       sizes: [{ label: "High, up to 3160 px wide", value: "high" }, { label: "Medium, up to 2160 px wide", value: "medium" },
         { label: "Low, up to 1080 px wide", value: "low" }, { label: "Original size", value: "original" }],
       format: "jpg", size: "medium"

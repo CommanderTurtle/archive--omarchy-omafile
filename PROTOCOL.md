@@ -572,11 +572,13 @@ tool's message. The temporary file is removed on failure.
 {"id": N, "op": "transcode", "paths": ["/home/me/Pictures/a.heic"], "format": "jpg", "resolution": "medium"}
 ```
 
-Cancellable. Every path must be absolute. `format` is `jpg`, `png`, `webp` or `avif` for pictures and `mp4` or
-`gif` for videos. `resolution` is `high`, `medium`, `low` or `original` for pictures and `4k`, `1080p`,
+Cancellable. Every path must be absolute. `format` is `jpg`, `png`, `webp`, `avif` or `jxl` for pictures and `mp4` or
+`gif` for videos. `resolution` is `high`, `medium`, `low`, `original` or `lossless` for pictures and `4k`, `1080p`,
 `720p` or `original` for videos. `original` does not resize, except that video sizes are rounded
-down to even numbers. Each file is opened as a handle and recognised by its first bytes;
-anything that is not a PNG, JPEG, GIF, WebP, TIFF, BMP, HEIC or AVIF picture or an MP4, MOV,
+down to even numbers. `lossless` is only for a JPEG made into `jxl`: it runs
+`cjxl --lossless_jpeg=1` on the handles, which keeps the JPEG's metadata so `djxl` can rebuild it
+byte for byte. Each file is opened as a handle and recognised by its first bytes;
+anything that is not a PNG, JPEG, GIF, WebP, TIFF, BMP, HEIC, AVIF or JPEG XL picture or an MP4, MOV,
 Matroska, AVI, MPEG or FLV video is refused without running a tool. Pictures go through
 `magick` with the input format pinned (`PNG:/proc/self/fd/<n>[0]`), `-auto-orient`, `-strip` and
 resource limits. Videos go through `ffmpeg -nostdin -protocol_whitelist file -format_whitelist

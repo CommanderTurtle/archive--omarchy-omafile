@@ -2239,7 +2239,21 @@ ShellRoot {
         var sizes = findChild(browser, "transcodeSize")
         verify(sizes.options.map(function (o) { return o.value }).indexOf("original") >= 0, "pictures can keep their size")
         var formats = findChild(browser, "transcodeFormat").options.map(function (o) { return o.value })
-        compare(formats, ["jpg", "png", "webp", "avif"], "pictures can become WebP and AVIF")
+        compare(formats, ["jpg", "png", "webp", "avif", "jxl"], "pictures can become WebP, AVIF and JPEG XL")
+        function sizeValues() { return findChild(browser, "transcodeSize").options.map(function (o) { return o.value }) }
+        browser.setTranscodeFormat("jxl")
+        verify(sizeValues().indexOf("lossless") < 0, "a PNG cannot be repacked losslessly")
+        browser.closeDialog()
+        browser.menuEntry = Model.decodeEntry(["photo.jpg", "f", 10, 100, 420, null], "/tmp")
+        browser.runAction("transcode")
+        browser.setTranscodeFormat("jxl")
+        verify(sizeValues().indexOf("lossless") >= 0, "a JPG can")
+        findChild(browser, "transcodeSize").changed("lossless")
+        browser.setTranscodeFormat("webp")
+        compare(browser.transcodeResolution, "original", "leaving JPEG XL drops the lossless choice")
+        browser.closeDialog()
+        browser.menuEntry = png
+        browser.runAction("transcode")
         sizes.changed("original")
         mock.calls = []
         browser.submitDialog()

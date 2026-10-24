@@ -853,6 +853,7 @@ test('previewSide uses a fixed choice as is and ignores anything else', function
 test('transcodeKind sorts pictures and videos by extension and skips everything else', function () {
   assert.equal(Model.transcodeKind({ name: 'IMG_1.HEIC' }), 'picture');
   assert.equal(Model.transcodeKind({ name: 'shot.png' }), 'picture');
+  assert.equal(Model.transcodeKind({ name: 'scan.JXL' }), 'picture');
   assert.equal(Model.transcodeKind({ name: 'clip.MOV' }), 'video');
   assert.equal(Model.transcodeKind({ name: 'drawing.svg' }), '', 'vector images are never transcoded');
   assert.equal(Model.transcodeKind({ name: 'notes.txt' }), '');

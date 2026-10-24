@@ -1,6 +1,6 @@
 var monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-var imageExtSet = toSet(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico', 'tiff', 'tif', 'heic', 'avif']);
+var imageExtSet = toSet(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'ico', 'tiff', 'tif', 'heic', 'avif', 'jxl']);
 var videoExtSet = toSet(['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'wmv', 'm4v', 'mpg', 'mpeg']);
 var audioExtSet = toSet(['mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac', 'wma', 'opus']);
 var archiveExtSet = toSet(['zip', 'tar', 'gz', 'bz2', 'xz', '7z', 'rar', 'zst', 'tgz']);
@@ -10,7 +10,7 @@ var fontExtSet = toSet(['ttf', 'otf', 'woff', 'woff2']);
 
 var extLabels = {
   png: 'PNG image', jpg: 'JPEG image', jpeg: 'JPEG image', gif: 'GIF image', bmp: 'Bitmap image',
-  webp: 'WebP image', svg: 'SVG image', ico: 'Icon image', tiff: 'TIFF image', tif: 'TIFF image',
+  webp: 'WebP image', jxl: 'JPEG XL image', svg: 'SVG image', ico: 'Icon image', tiff: 'TIFF image', tif: 'TIFF image',
   heic: 'HEIC image', avif: 'AVIF image',
   mp4: 'MP4 video', mkv: 'Matroska video', avi: 'AVI video', mov: 'QuickTime video', webm: 'WebM video',
   flv: 'Flash video', wmv: 'WMV video', m4v: 'MPEG-4 video', mpg: 'MPEG video', mpeg: 'MPEG video',
@@ -369,7 +369,7 @@ function previewSide(choice, screenPixels) {
   return autoPreviewMax;
 }
 
-var transcodePictureExts = toSet(['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif', 'avif', 'bmp', 'tif', 'tiff']);
+var transcodePictureExts = toSet(['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif', 'avif', 'jxl', 'bmp', 'tif', 'tiff']);
 var transcodeVideoExts = toSet(['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', 'mpg', 'mpeg', 'ts', 'flv']);
 
 function transcodeKind(entry) {

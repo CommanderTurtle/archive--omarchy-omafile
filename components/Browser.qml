@@ -1137,7 +1137,8 @@ Item {
   readonly property var transcodeChoices: ({
     picture: {
       formats: [{ label: "JPG, smaller", value: "jpg" }, { label: "PNG, lossless", value: "png" },
-        { label: "WebP, small, keeps transparency", value: "webp" }, { label: "AVIF, smallest, keeps transparency", value: "avif" }],
+        { label: "WebP, small, keeps transparency", value: "webp" }, { label: "AVIF, smallest, keeps transparency", value: "avif" },
+        { label: "JPEG XL, small, best for keeping", value: "jxl" }],
       sizes: [{ label: "High, up to 3160 px wide", value: "high" }, { label: "Medium, up to 2160 px wide", value: "medium" },
         { label: "Low, up to 1080 px wide", value: "low" }, { label: "Original size", value: "original" }],
       format: "jpg", size: "medium"
@@ -1149,6 +1150,27 @@ Item {
       format: "mp4", size: "1080p"
     }
   })
+
+  function allJpeg(targets) {
+    for (var i = 0; i < targets.length; i++) {
+      var ext = String(targets[i].ext || "").toLowerCase()
+      if (ext !== "jpg" && ext !== "jpeg") return false
+    }
+    return targets.length > 0
+  }
+
+  function transcodeSizeOptions() {
+    if (dialogMode !== "transcode" || !dialogPayload) return []
+    var sizes = transcodeChoices[dialogPayload.kind].sizes
+    if (dialogPayload.kind !== "picture" || transcodeFormat !== "jxl" || !allJpeg(dialogPayload.targets)) return sizes
+    return sizes.concat([{ label: "Lossless repack of the JPG, can be turned back exactly", value: "lossless" }])
+  }
+
+  function setTranscodeFormat(value) {
+    transcodeFormat = value
+    if (transcodeResolution === "lossless" && (value !== "jxl" || !dialogPayload || !allJpeg(dialogPayload.targets)))
+      transcodeResolution = "original"
+  }
 
   function transcodeTargets(entry) {
     var kind = Model.transcodeKind(entry)
@@ -1167,7 +1189,7 @@ Item {
     var kind = Model.transcodeKind(entry)
     var last = transcodeLast[kind] || transcodeChoices[kind]
     transcodeFormat = last.format
-    transcodeResolution = last.size
+    transcodeResolution = last.size === "lossless" && (last.format !== "jxl" || !allJpeg(targets)) ? "original" : last.size
     showDialog("transcode", "Transcode " + (targets.length === 1 ? targets[0].name : Model.formatCount(targets.length, "item", "items")),
       "", { kind: kind, targets: targets })
   }
@@ -3692,7 +3714,7 @@ Item {
             label: "Format"
             value: root.transcodeFormat
             options: root.dialogMode === "transcode" && root.dialogPayload ? root.transcodeChoices[root.dialogPayload.kind].formats : []
-            onChanged: function (v) { root.transcodeFormat = v }
+            onChanged: function (v) { root.setTranscodeFormat(v) }
           }
 
           Dropdown {
@@ -3701,7 +3723,7 @@ Item {
             visible: root.dialogMode === "transcode"
             label: "Size"
             value: root.transcodeResolution
-            options: root.dialogMode === "transcode" && root.dialogPayload ? root.transcodeChoices[root.dialogPayload.kind].sizes : []
+            options: root.transcodeSizeOptions()
             onChanged: function (v) { root.transcodeResolution = v }
           }
 
@@ -3709,7 +3731,9 @@ Item {
             textFormat: Text.PlainText
             width: parent.width
             visible: root.dialogMode === "transcode"
-            text: "A new file is made next to each one. Nothing is replaced."
+            text: root.transcodeResolution === "lossless"
+              ? "A new file is made next to each one. Nothing is replaced. A lossless repack keeps every pixel and the photo's metadata, so the JPG can be rebuilt exactly with djxl."
+              : "A new file is made next to each one. Nothing is replaced."
             color: Util.alpha(Color.popups.text, 0.6)
             font.family: Style.font.family
             font.pixelSize: Style.font.caption

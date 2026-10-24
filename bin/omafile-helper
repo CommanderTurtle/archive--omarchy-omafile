@@ -4457,10 +4457,12 @@ def op_compress(req, cancel_event):
 
 
 TRANSCODE_TIMEOUT = 6 * 3600.0
-TRANSCODE_PICTURE_SIZES = {"high": "3160x>", "medium": "2160x>", "low": "1080x>", "original": None}
+TRANSCODE_PICTURE_SIZES = {"high": "3160x>", "medium": "2160x>", "low": "1080x>", "original": None, "lossless": None}
+JXL_CODESTREAM = b"\xff\x0a"
+JXL_CONTAINER = b"\0\0\0\x0cJXL \r\n\x87\n"
 TRANSCODE_VIDEO_SIZES = {"4k": 2160, "1080p": 1080, "720p": 720, "original": None}
 TRANSCODE_EVEN_SIZE = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
-TRANSCODE_FORMATS = {"picture": ("jpg", "png", "webp", "avif"), "video": ("mp4", "gif")}
+TRANSCODE_FORMATS = {"picture": ("jpg", "png", "webp", "avif", "jxl"), "video": ("mp4", "gif")}
 TRANSCODE_DEMUXERS = "mov,matroska,avi,mpegts,flv,mpeg"
 TRANSCODE_IMAGE_LIMITS = ["-limit", "memory", "1GiB", "-limit", "map", "2GiB", "-limit", "disk", "4GiB",
                           "-limit", "area", "256MP", "-limit", "time", "900"]
@@ -4481,6 +4483,8 @@ def media_kind(head):
         return "picture", "TIFF"
     if head[:2] == b"BM":
         return "picture", "BMP"
+    if head.startswith(JXL_CODESTREAM) or head.startswith(JXL_CONTAINER):
+        return "picture", "JXL"
     if head[4:8] == b"ftyp":
         brand = head[8:12]
         if brand in HEIF_BRANDS:
@@ -4496,6 +4500,8 @@ def media_kind(head):
 def transcode_argv(kind, coder, fmt, resolution, in_fd, out_fd, programs):
     source = "/proc/self/fd/%d" % in_fd
     target = "/proc/self/fd/%d" % out_fd
+    if kind == "picture" and resolution == "lossless":
+        return [programs["cjxl"], source, target, "--lossless_jpeg=1", "--quiet"]
     if kind == "picture":
         argv = [programs["magick"]] + TRANSCODE_IMAGE_LIMITS + ["%s:%s[0]" % (coder, source), "-auto-orient"]
         if TRANSCODE_PICTURE_SIZES[resolution]:
@@ -4506,6 +4512,8 @@ def transcode_argv(kind, coder, fmt, resolution, in_fd, out_fd, programs):
             return argv + ["-quality", "82", "-define", "webp:method=6", "-strip", "WEBP:" + target]
         if fmt == "avif":
             return argv + ["-quality", "60", "-define", "heic:speed=6", "-strip", "AVIF:" + target]
+        if fmt == "jxl":
+            return argv + ["-quality", "85", "-strip", "JXL:" + target]
         return argv + ["-strip", "-define", "png:compression-filter=5", "-define", "png:compression-level=9",
                        "-define", "png:compression-strategy=1", "-define", "png:exclude-chunk=all", "PNG:" + target]
     height = TRANSCODE_VIDEO_SIZES[resolution]
@@ -4540,7 +4548,11 @@ def transcode_one(path, fmt, resolution, programs, cancel_event):
             raise ValueError("a %s cannot be made into %s" % (kind, fmt))
         if resolution not in (TRANSCODE_PICTURE_SIZES if kind == "picture" else TRANSCODE_VIDEO_SIZES):
             raise ValueError("%s is not a %s size" % (resolution, kind))
-        if programs.get("magick" if kind == "picture" else "ffmpeg") is None:
+        if resolution == "lossless" and (fmt != "jxl" or coder != "JPEG"):
+            raise ValueError("only a JPG can be repacked losslessly, and only as JPEG XL")
+        if resolution == "lossless" and programs.get("cjxl") is None:
+            raise FileNotFoundError(errno.ENOENT, "cjxl from libjxl is not installed")
+        if resolution != "lossless" and programs.get("magick" if kind == "picture" else "ffmpeg") is None:
             raise FileNotFoundError(errno.ENOENT, "%s is not installed" % ("ImageMagick" if kind == "picture" else "ffmpeg"))
         while True:
             work = b".omafile-transcode-" + os.urandom(6).hex().encode() + b"." + fmt.encode()
@@ -4577,12 +4589,12 @@ def op_transcode(req, cancel_event):
     fmt = req.get("format")
     resolution = req.get("resolution")
     if (not isinstance(paths, list) or not paths or not all(isinstance(p, str) and os.path.isabs(p) for p in paths)
-            or fmt not in ("jpg", "png", "webp", "avif", "mp4", "gif")
+            or fmt not in ("jpg", "png", "webp", "avif", "jxl", "mp4", "gif")
             or resolution not in TRANSCODE_PICTURE_SIZES and resolution not in TRANSCODE_VIDEO_SIZES):
         send_error(req_id, "EINVAL", "absolute paths, a format and a size are required")
         return
     programs = {}
-    for name in ("magick", "ffmpeg"):
+    for name in ("magick", "ffmpeg", "cjxl"):
         try:
             programs[name] = trusted_program(name)
         except FileNotFoundError:

@@ -291,7 +291,11 @@ Item {
 
       MouseArea {
         anchors.fill: parent
-        onClicked: host.requestClose()
+        onClicked: {
+          var browser = popupLoader.item
+          if (browser && browser.holdsUnsaved) browser.requestClose()
+          else host.requestClose()
+        }
       }
     }
 

@@ -556,8 +556,10 @@ Item {
     })
   }
 
-  function readClipboardText(onText) {
-    return request({ op: "cliptext" }, {
+  function readClipboardText(onText, limit) {
+    var body = { op: "cliptext" }
+    if (limit) body.limit = limit
+    return request(body, {
       onDone: function (m) { onText(String(m.text || "")) },
       onError: function () {}
     })
@@ -1170,21 +1172,46 @@ Item {
     return id
   }
 
+  function readText(path, onDone, onError) {
+    var reply = null
+    return request({ op: "readtext", path: String(path) }, {
+      onData: function (m) { if (m.t === "text") reply = m },
+      onDone: function () { if (reply && onDone) onDone(reply) },
+      onError: onError
+    })
+  }
+
+  function writeText(path, text, expect, force, crlf, bom, onDone, onError) {
+    return request({ op: "writetext", path: String(path), text: String(text), expect: expect || ({}),
+      force: force === true, crlf: crlf === true, bom: bom === true }, { onDone: onDone, onError: onError })
+  }
+
+  function findDuplicates(root, path, hidden, onProgress, onDone, onError) {
+    var body = { op: "duplicates", root: String(root), hidden: hidden === true }
+    if (path) body.path = String(path)
+    return request(body, {
+      onData: function (m) { if (m.t === "progress" && onProgress) onProgress(m) },
+      onDone: onDone,
+      onError: onError
+    })
+  }
+
   function transcodePaths(paths, format, resolution, onDone, onError) {
     var folder = Model.dirname(paths[0])
     var record = {
-      id: 0, op: "transcode", label: resolution + " " + format, dest: folder, state: "running",
+      id: 0, op: "transcode", label: format + " " + resolution, dest: folder, state: "running",
       bytes: 0, total: 0, files: 0, filesTotal: paths.length, current: "", rate: 0,
       errors: [], startedMs: Date.now(), finishedMs: 0, count: paths.length, from: folder
     }
     var id = request({ op: "transcode", paths: paths, format: format, resolution: resolution }, {
       onData: function (m) {
         if (m.t === "progress") updateTransfer(m.id, {
-          files: Number(m.files) || 0, current: String(m.current || "")
+          files: Number(m.files) || 0, filesTotal: Number(m.filesTotal) || 0, current: String(m.current || "")
         })
       },
       onDone: function (m) {
-        updateTransfer(m.id, { state: "done", result: String((m.outputs && m.outputs[0]) || "") })
+        var outputs = m.outputs || []
+        updateTransfer(m.id, { state: "done", result: outputs.length > 0 ? String(outputs[0]) : "", errors: m.failures || [] })
         trimTransferHistory()
         if (onDone) onDone(m)
       },
@@ -1199,44 +1226,6 @@ Item {
     next.push(record)
     transfers = next
     return id
-  }
-
-  function transcodeQualityPaths(paths, format, quality, resolution, onDone, onError) {
-    var folder = Model.dirname(paths[0])
-    var record = {
-      id: 0, op: "transcode", label: [format, quality, resolution].filter(function (s) { return s }).join(" "), dest: folder, state: "running",
-      bytes: 0, total: 0, files: 0, filesTotal: paths.length, current: "", rate: 0,
-      errors: [], startedMs: Date.now(), finishedMs: 0, count: paths.length, from: folder
-    }
-    var id = request({ op: "transcode", paths: paths, format: format, quality: quality, resolution: resolution }, {
-      onData: function (m) {
-        if (m.t === "progress") updateTransfer(m.id, {
-          files: Number(m.files) || 0, current: String(m.current || "")
-        })
-      },
-      onDone: function (m) {
-        updateTransfer(m.id, { state: "done", result: String((m.outputs && m.outputs[0]) || "") })
-        trimTransferHistory()
-        if (onDone) onDone(m)
-      },
-      onError: function (m) {
-        updateTransfer(m.id, { state: m.code === "ECANCELED" ? "cancelled" : "failed", message: String(m.message || "") })
-        trimTransferHistory()
-        if (onError) onError(m)
-      }
-    })
-    record.id = id
-    var next = transfers.slice()
-    next.push(record)
-    transfers = next
-    return id
-  }
-
-  function imageSize(path, onReady, onError) {
-    return request({ op: "imagedims", path: path }, {
-      onDone: function (m) { if (onReady) onReady(m) },
-      onError: function (m) { if (onError) onError(m) }
-    })
   }
 
   function extractArchive(path, onDone, onError) {
@@ -1276,31 +1265,63 @@ Item {
   }
 
   function openExternallyFiles(paths) {
-    var list = [];
-    for (var i = 0; i < paths.length; i++)
-      if (paths[i]) list.push(String(paths[i]));
-    if (list.length === 0) return;
-    if (list.length === 1) {
-      Quickshell.execDetached(["gio", "open", list[0]]);
-      return;
+    var list = []
+    for (var i = 0; i < paths.length; i++) list.push(String(paths[i]))
+    if (list.length < 2) {
+      for (var j = 0; j < list.length; j++) openExternally(list[j])
+      return
     }
-    // `gio open p1 p2 ...` spawns the default app once per file (stacked
-    // windows). Launch the app a single time with the whole selection, the
-    // way Nautilus does; fall back to the per-file launch if that fails.
-    request({ op: "openfiles", paths: list }, {
-      onError: function () {
-        var argv = ["gio", "open"]
-        for (var j = 0; j < list.length; j++) argv.push(list[j])
-        Quickshell.execDetached(argv)
-      }
+    var handlers = ({})
+    var left = list.length
+    var settle = function () {
+      left--
+      if (left === 0) root.launchByHandler(list, handlers)
+    }
+    for (var k = 0; k < list.length; k++) root.requestHandler(list[k], handlers, settle)
+  }
+
+  function requestHandler(path, handlers, settle) {
+    return request({ op: "opener", path: path }, {
+      onData: function (m) { if (m.t === "opener") handlers[path] = String(m.handler || "") },
+      onDone: settle,
+      onError: settle
     })
   }
 
-  function openWithFiles(command, paths, inTerminal) {
-    var argv = Model.expandFieldCodesMulti(command, paths)
-    if (argv.length === 0) return
-    if (inTerminal) argv = ["xdg-terminal-exec"].concat(argv)
-    Quickshell.execDetached(argv)
+  function appCommand(app) {
+    if (!app) return []
+    var exec = Model.tokenizeCommand(String(app.execString || ""))
+    if (exec.length > 0) return exec
+    return Array.prototype.slice.call(app.command || [])
+  }
+
+  function launchByHandler(list, handlers) {
+    var groups = ({})
+    var order = []
+    for (var i = 0; i < list.length; i++) {
+      var id = String(handlers[list[i]] || "").replace(/\.desktop$/, "")
+      var app = id ? DesktopEntries.byId(id) : null
+      var command = appCommand(app)
+      if (command.length === 0) {
+        openExternally(list[i])
+        continue
+      }
+      if (!groups[id]) {
+        groups[id] = { command: command, terminal: app.runInTerminal === true, paths: [] }
+        order.push(id)
+      }
+      groups[id].paths.push(list[i])
+    }
+    for (var g = 0; g < order.length; g++) {
+      var group = groups[order[g]]
+      openWith(group.command, group.paths, group.terminal)
+    }
+  }
+
+  function openWith(command, paths, inTerminal) {
+    var launches = Model.expandFieldCodesMulti(command, paths)
+    for (var i = 0; i < launches.length; i++)
+      Quickshell.execDetached(inTerminal ? ["xdg-terminal-exec"].concat(launches[i]) : launches[i])
   }
 
   function setDefaultApp(path, desktopId, onDone, onError) {
@@ -1314,7 +1335,7 @@ Item {
     })
   }
 
-  function runCommandOnFiles(text, paths) {
+  function runCommandOn(text, paths) {
     var argv = Model.tokenizeCommand(text)
     if (argv.length === 0) return false
     for (var i = 0; i < paths.length; i++) argv.push(String(paths[i]))
@@ -1329,14 +1350,84 @@ Item {
   }
 
   function openAgent(path) {
+    if (!agentCommand) return
     Quickshell.execDetached(["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--dir=" + path,
-      "bash", "-c", (agentCommand || "claude") + "; exec bash"])
+      "bash", "-c", agentCommand + "; exec bash"])
   }
 
-  function openEditor(path) {
-    var configured = String(settingNow("editor", "") || "").trim()
-    if (configured) Quickshell.execDetached(["sh", "-c", configured + " \"$1\"", "omafile", path])
-    else Quickshell.execDetached(["omarchy-launch-editor", path])
+  property string omarchyEditor: "nvim"
+  property string omarchyAgent: ""
+  property bool omarchyAgentFound: false
+  property var programsFound: ({})
+  readonly property var editorApps: Model.knownEditors.filter(function (e) { return root.programsFound[e.id] === true })
+  readonly property string editorChoice: String(settingNow("editorChoice", "") || "")
+  readonly property string editorCommand: String(settingNow("editor", "") || "").trim()
+
+  function refreshDefaults() {
+    return request({ op: "defaults", names: Model.knownEditors.map(function (e) { return e.id }) }, {
+      onData: function (m) {
+        if (m.t !== "defaults") return
+        root.omarchyEditor = String(m.editor || "nvim")
+        root.omarchyAgent = String(m.agent || "")
+        root.omarchyAgentFound = m.agentFound === true
+        root.programsFound = m.found || ({})
+      }
+    })
+  }
+
+  function checkProgram(command, onResult) {
+    var program = Model.commandProgram(command)
+    if (!program) {
+      Qt.callLater(function () { onResult(false) })
+      return 0
+    }
+    var found = false
+    return request({ op: "defaults", names: [program] }, {
+      onData: function (m) { if (m.t === "defaults" && m.found) found = m.found[program] === true },
+      onDone: function () { onResult(found) },
+      onError: function () { onResult(false) }
+    })
+  }
+
+  function editorPlan(onPlan) {
+    if (editorChoice === "omarchy" || editorChoice === "omafile") {
+      var mode = editorChoice
+      Qt.callLater(function () { onPlan({ mode: mode }) })
+      return
+    }
+    var command = editorCommand
+    if (!command) {
+      Qt.callLater(function () { onPlan({ ask: true, error: "" }) })
+      return
+    }
+    checkProgram(command, function (found) {
+      onPlan(found ? { mode: "own", command: command } : { ask: true, error: command })
+    })
+  }
+
+  function launchEditor(plan, paths) {
+    var list = []
+    for (var i = 0; i < paths.length; i++) list.push(String(paths[i]))
+    if (list.length === 0 || !plan) return
+    if (plan.mode === "omarchy" || plan.mode === "omafile") {
+      Quickshell.execDetached(["omarchy-launch-editor"].concat(list))
+      return
+    }
+    var command = String(plan.command || "").trim()
+    if (!command) return
+    var script = ["sh", "-c", command + " \"$@\"", "omafile"].concat(list)
+    if (Model.editorInTerminal(command))
+      Quickshell.execDetached(["omarchy-launch-tui", "--app-id=org.omarchy." + Model.commandName(command)].concat(script))
+    else
+      Quickshell.execDetached(["setsid", "uwsm-app", "--"].concat(script))
+  }
+
+  function setOmarchyEditor(id) {
+    var known = Model.knownEditor(String(id || ""))
+    if (!known || !known.omarchy) return false
+    Quickshell.execDetached(["omarchy-default-editor", known.id])
+    omarchyEditor = known.id
+    return true
   }
 
   function openEditorFiles(paths) {
@@ -1774,6 +1865,7 @@ Item {
         helperStable.restart()
         Qt.callLater(root.drainQueue)
         Qt.callLater(root.refreshBookmarks)
+        Qt.callLater(root.refreshDefaults)
         if (root.helperRestarts > 0) Qt.callLater(root.refreshTrash)
       } else {
         root.helperReady = false
@@ -1797,9 +1889,10 @@ Item {
   }
 
   property bool claudeAvailable: false
-  readonly property string agentCommand: String(settingNow("agent", "") || "").trim()
-  readonly property string agentName: agentCommand ? (Model.commandName(agentCommand) || agentCommand) : "Claude Code"
-  readonly property bool agentAvailable: agentCommand !== "" || claudeAvailable
+  readonly property var agent: Model.agentChoice(settingNow("agent", ""), omarchyAgent, omarchyAgentFound, claudeAvailable)
+  readonly property string agentCommand: agent.command
+  readonly property string agentName: agent.name
+  readonly property bool agentAvailable: agentCommand !== ""
 
   property Process claudeCheck: Process {
     command: ["sh", "-c", "command -v claude"]

@@ -24,11 +24,14 @@ The panel is declared `keepLoaded`, so QML changes do **not** hot reload. Run `o
 | `components/PaneView.qml` | One directory pane, list and grid, selection and search |
 | `components/PathBar.qml` | Address bar, breadcrumbs, inline editing, the filter |
 | `components/SidebarPlaces.qml` | Places, bookmarks, drives, network |
+| `components/TextEditorView.qml` | The built in text editor |
+| `components/DuplicatesView.qml` | The duplicate finder and its side by side compare |
 | `components/TabStrip.qml`, `TransferBar.qml`, `PlaceRow.qml` | Small pieces |
 | `bin/omafile-helper` | Python 3 daemon, standard library only. Every filesystem operation happens here |
 | `bin/omafile-filemanager1` | Optional D-Bus service for Show in folder. Needs PyGObject, and is feature detected |
 | `Model.js` | Pure logic: decoding, sorting, filtering, formatting, paths |
 | `Icons.js` | Glyph tables |
+| `EditorEditing.js` | The text editor's typing, undo, indent and find, kept on its own copy of the text |
 | `PROTOCOL.md` | The contract between the shell and the helper |
 | `tests/` | Node tests for the JS modules, unittest for the helper |
 

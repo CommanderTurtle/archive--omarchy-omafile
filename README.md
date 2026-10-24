@@ -15,6 +15,8 @@ A lightweight, fast file manager plugin for Omarchy running in the shell.
 * Background copy and move with persistent progress tracking
 * Freedesktop trash integration, compatible with GNOME Files, with Empty trash and Restore in the trash view
 * Recursive file search across directories
+* Find duplicate files and compare two copies side by side before trashing one
+* A simple built in text editor for config files, notes and scripts
 * Thumbnails in list, compact, grid and gallery view for images, videos, PDFs, office files and anything else your system has a thumbnailer for
 * Recent files, and bookmarks for the folders you use most
 * Connect to SMB, SFTP, WebDAV and other servers
@@ -99,13 +101,45 @@ Zoom scales rows, icons and grid cells from 50 to 300 percent. Use the minus and
 
 Press Space on a file to preview it without opening another app. Images are shown at up to 1024 px, made by your system's thumbnailer rather than decoded inside the shell, so a crafted image cannot weigh the desktop down; image previews follow the Previews and thumbnails setting. Text files such as `.yml`, `.json`, `.md` or scripts are shown as text, up to the first 256 KB. Arrow keys move to the next file while the preview stays open. Enter opens the file, and Space or Escape closes the preview. Preview is also in the right click menu.
 
+Scroll over a picture to zoom in at the pointer, up to 8 times, and drag to move around. Double click, or press 0, to fit it again, and + and - zoom from the keyboard. The zoom stays as you arrow to the next picture, which starts centred. **Image preview size** in Settings, under Browsing, sets how sharp the preview is. **Automatic**, the default, matches the preview to your screen's real pixels: 1024 px on a 1080p screen, 2048 or 4096 px on a 4K one. Pick 4096 px or 7680 px to see more detail when you zoom in, up to native resolution for 8K pictures. A picture is never made bigger than it is. Previews above 1024 px take a few seconds the first time, about 4 seconds for an 8K picture, and are kept in Omafile's own cache so the next look is instant. While one is made the standard preview shows, so arrowing through a folder stays quick. They are made by your system's thumbnailer like every other preview; the original file is still never decoded inside the shell.
+
 Audio files (`.mp3`, `.flac`, `.ogg`, `.opus`, `.m4a`, `.aac`, `.wav`, `.wma`) start playing as soon as the preview opens, with the title, artist, album and cover art when the file has them. Arrow to the next file to hear it instead, which makes it quick to go through a folder of tracks or samples. K or P plays and pauses, Shift+Left and Shift+Right skip 5 seconds, and M mutes. Playback stops when the preview closes. The volume is kept while the window stays open. Playing audio needs Qt Multimedia, which Omarchy already installs alongside Kdenlive. Without it the preview says to install `qt6-multimedia`. The shell plays a copy of the song's audio that Omafile makes with `ffmpeg`, without cover art or tags, so a crafted song cannot reach the shell's media player; the cover comes from the thumbnailer instead.
+
+Open, Open with and Open in editor in the right click menu act on every selected item when you right click one of them. Opening several files starts each app once with all of its files, the way GNOME Files does, instead of a window per file. Apps that take one file at a time get one launch per file.
 
 Open with in the right click menu lists your apps with their icons. Click an app to select it, then double click it or press Open. Turn on **Always open ... with this app** to make it the default for that file type, the same default double click and Opens with in Properties use. It is not offered for folders.
 
 Right click an archive and choose **Extract here** to extract it next to itself. It works on several selected archives at once. Zip, tar, 7z and rar files are supported. An archive with one item at the top, such as a single folder, extracts as that item. Anything else goes into a new folder named after the archive. Existing files are never overwritten: a clashing name gets a number. Extractions show in the Transfers panel with how much of the archive has been read, the number of files so far and a button to cancel. A cancelled or failed extraction leaves nothing behind. The extracted item is selected when it is done. Double click and Enter open an archive in your default app, unless you turn on **Extract archives when opened** in Settings, under Browsing, which makes them extract it instead, as GNOME Files does.
 
 To make an archive, select files or folders, right click and choose **Compress…**. Name it and pick a format: `.zip` opens anywhere, `.tar.xz` and `.tar.gz` suit Linux and macOS, and `.7z` is the smallest but needs 7-Zip on Windows. The archive is made next to the items, shows in the Transfers panel with a cancel button, and is selected when it is done. An existing file with the same name is never replaced: the new archive gets a number.
+
+Right click a picture or video, or several, and choose **Transcode…** to make a copy for sharing, with the same presets as Omarchy's `omarchy transcode`. Pictures become JPG, PNG, WebP, AVIF or JPEG XL at high (3160 px wide), medium (2160 px), low (1080 px) or their original size, turned the right way up and without their metadata, such as where a photo was taken. Videos become MP4 or GIF at 4K, 1080p, 720p or their original size, also without metadata. Original size keeps every pixel, except that a video's width and height are rounded down to even numbers, which MP4 needs. The copy is made next to each file as `name-size.format`, shows in the Transfers panel with a cancel button, and is selected when it is done. An existing file is never replaced: the copy gets a number. Unlike `omarchy transcode`, it does not replace your clipboard. WebP and AVIF are much smaller than JPG at the same quality and keep transparency, which JPG cannot; AVIF is the smallest but slower to make. JPEG XL is as small, is the best choice for keeping your own pictures, and is still not opened by every app or browser, so WebP is safer for sending. For a JPG, JPEG XL also offers **Lossless repack**: the picture is packed about 20 percent smaller with every pixel and its metadata kept, and `djxl` turns it back into a byte for byte copy of the original JPG. Lossless repack needs `cjxl` from libjxl, which Omarchy installs. Transcoding needs ImageMagick for pictures and `ffmpeg` for videos, which Omarchy installs.
+
+### Editing text
+
+Right click a text file and choose **Edit**, or press Ctrl+E, to edit it inside Omafile without opening another app. It is meant for quick changes to config files, notes and scripts up to 1 MB.
+
+* Ctrl+S saves. A dot before the name means there are unsaved changes, and closing asks whether to save them.
+* Ctrl+Z and Ctrl+Shift+Z undo and redo, a word at a time. Ctrl+X, Ctrl+C and Ctrl+V cut, copy and paste.
+* Enter keeps the indentation of the line. Tab indents with the file's own style, tabs or spaces, and Tab or Shift+Tab on a selection indents or outdents every selected line.
+* Ctrl+F finds text. Enter or F3 goes to the next match and Shift+Enter or Shift+F3 to the previous one. A search in lower case ignores case.
+* Alt+Z, or the Wrap button, turns line wrapping on and off. PageUp and PageDown move a screen at a time.
+* Escape, Ctrl+W or the close button closes the editor.
+* **Auto save**, in the editor's header or under Settings, Browsing, saves a second after you stop typing and when the editor or its window closes. It is off by default, because apps that reload their config when it is saved, such as Hyprland, would apply each half typed change. If the file changed on disk, or a save fails, auto save pauses until you save by hand, so it never overwrites another app's changes.
+
+The file is saved exactly as you typed it, as UTF-8, keeping its Windows or Unix line endings and its byte order mark. Saving writes a new copy and swaps it in, so a crash halfway never leaves half a file, and the file keeps its permissions. A file with other hard links is written in place instead, so every name sees the change. If the file changed on disk since you opened it, saving asks whether to overwrite it or load the new version. Opening a link edits the file it points to. Files that are not UTF-8 text, that are bigger than 1 MB, that have a line over 20,000 characters, such as minified code, or that have stray carriage returns are not opened, because editing them inside the shell would be slow or would change them. Files you cannot write open read only. Omafile asks before it closes the editor with unsaved changes. Closing the window from Hyprland, or toggling the popup away with its key, closes it without asking: with auto save on, your changes are saved first, and with it off they are lost.
+
+### Finding duplicates
+
+Right click a file and choose **Find duplicates…** to find other copies of it with exactly the same contents. Omafile looks through your home folder, or the file's own folder when it is outside your home; the menu at the top switches between the file's folder and your home folder. Right click a folder and choose **Find duplicates in this folder**, or right click empty space and choose **Find duplicates here**, to find every file in it that has a copy.
+
+Two copies show side by side with a preview, where each one is, its size and when it was changed, and the newest and oldest are marked. The file you picked, or the oldest copy, is on the left. Left and Right arrows, or the list below, choose which other copy is on the right. A folder search lists every file that has copies on the left, largest first; Up and Down move through them.
+
+* **Move to trash** trashes that copy. Delete trashes the copy on the right.
+* **Keep only this** keeps that copy and trashes every other one, after asking.
+* **Open** opens a copy, and **Show in folder** closes the finder and selects the copy in its folder.
+
+Everything goes to the trash, so Restore in the trash puts a copy back, and Ctrl+Z after closing the finder undoes the last trashing. Files count as duplicates only when every byte matches, not just the name or size. Empty files are not counted, hard links to the same file are counted once, hidden files and folders are skipped unless **Hidden files** is on, the trash is never searched, and the search stays on one drive. Escape or Stop ends a search early.
 
 ### Transfers
 
@@ -143,11 +177,18 @@ This uses GVFS and needs no root. Install `gvfs-smb` for Windows shares if it is
 
 ### Terminal, editor and agent
 
-Right click a folder, or empty space for the folder you are in, and choose Open in terminal, or press Ctrl+.. With [Claude Code](https://claude.com/claude-code) installed, Open Claude Code here starts it in that folder and leaves a shell open when it exits.
+Right click a folder, or empty space for the folder you are in, and choose Open in terminal, or press Ctrl+.. The agent item starts a coding agent in that folder and leaves a shell open when it exits. It runs the agent you picked with `omarchy default agent`, such as Open Oh My Pi here, or Claude Code when you have not picked one and it is installed. Omafile starts the agent plainly, without the auto-approve flags `omarchy agent` adds, because the folder may be one you just downloaded. Set your own agent under Settings, Commands, Agent, such as `omp` or `codex --full-auto`. The item is then named after it, Open omp here.
 
-Set another agent under Settings, Commands, Agent, such as `omp` or `codex --full-auto`. The item is then named after it, Open omp here, and shows whether or not Claude Code is installed.
+Open in editor, right under Open with, opens the selected files or folders in an editor. The first time, it asks which one:
 
-Open in editor, right under Open with, opens a file or folder in the Editor command from Settings, Commands, or in your Omarchy default editor when that is empty. Set it to `zeditor` or `code` to open folders as projects.
+| Choice | What it does |
+|--------|--------------|
+| Omarchy's default | Follows `omarchy default editor`, so changing it there changes it here |
+| Omafile's editor | Opens a text file in Omafile's own editor, the same as **Edit**. Folders, several files at once, and files it cannot edit open in Omarchy's default editor instead |
+| An editor you have | VS Code, Zed, Neovim, nano and the others Omafile finds installed. Terminal editors open in your terminal. For an editor Omarchy knows, **Also make it Omarchy's default editor** sets it for all of Omarchy too |
+| A command you type | Anything on your `PATH`, such as `code --new-window` or `alacritty -e nvim` |
+
+Omafile remembers the choice. Change it under Settings, Commands, Editor, or pick Ask the first time to be asked again. If a saved command no longer exists, Open in editor asks again instead of failing.
 
 ### Settings
 
@@ -180,6 +221,8 @@ gio mime inode/directory
 Turn on Pick files for other apps in Settings, under Opening. When a browser or another app asks you to choose a file, for example Upload file in Chrome or Firefox, Omafile opens instead of the GTK file chooser. The same goes for Save as and download locations. The chooser opens in its own floating window over the app and closes once you pick, so Omafile windows you already have open are left alone. An open popup panel closes so it does not cover the chooser. A bar along the bottom of the window shows what the app asked for, with a name box when saving and the app's file type filters. Pick a file and press Enter or the Select button, or press `Escape` to cancel. To make a folder first, choose New folder from the menu at the top right or press Ctrl+Shift+N; the chooser opens it, ready to pick or save into.
 
 The chooser is only for choosing. The title names the app that asked, when the portal says which one. Trash, delete, paste, drop, rename, Properties, undo, the terminal and the other actions that change files are switched off while it is open, and no thumbnails are made for the folder the app opened it in. One app at a time can use it: a second request is turned down instead of replacing the one you are answering. Links are not handed out, so pick the file a link points to instead. When an app saves several files into a folder that already has some of those names, the new files get numbered names, so nothing there is overwritten.
+
+An app can open the chooser while you are typing somewhere else, so it ignores keys for the first moment, and typing that was already going on is ignored until it stops. Save and Select do nothing during that moment. If your typing was ignored, the name field waits for a click before it takes keys, so the rest of what you were typing cannot become the file name.
 
 It works through the desktop portal, the same route every app uses to ask for a file. Omafile registers a small D-Bus service in your home directory and tells the portal to send file chooser requests to it. Other portals, such as screen sharing, are left alone.
 
@@ -266,6 +309,7 @@ The context menu is a real focus target: arrows move through it, Enter or Space 
 | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy, cut and paste |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo and redo |
 | `F2` | Rename |
+| `Ctrl+E` | Edit a text file in Omafile |
 | `Ctrl+Shift+N` | New folder |
 | `Ctrl+N` | New file |
 | `Delete` | Move to trash, or delete permanently when already in the trash |
@@ -303,6 +347,7 @@ Undo covers trash, rename, move, copy and new file or folder. Undoing a trash pu
 | `K` / `P` | Play or pause audio, in the preview |
 | `Shift+Left` / `Shift+Right` | Skip back or forward 5 seconds, in the preview |
 | `M` | Mute audio, in the preview |
+| `+` / `-` / `0` | Zoom a picture in, out and back to fit, in the preview |
 | `Ctrl+H` | Show hidden files |
 | `F9` / `Ctrl+B` | Show or hide the sidebar |
 | `Ctrl+F`, or just type | Search in this folder |
@@ -345,13 +390,16 @@ Configure these keys through the Omarchy bar widget settings:
 | `useTrash` | Send deleted items to trash (vs. permanent deletion) |
 | `defaultView` | Start in `list`, `compact`, `grid` or `gallery` view |
 | `rememberFolderViews` | Open each folder in the view last picked there, and other folders in `defaultView` |
+| `editorAutoSave` | The text editor saves a second after you stop typing and when it closes. Off by default |
 | `extractOnOpen` | Double click and Enter extract archives instead of opening them. Off by default |
 | `terminal` | Terminal command to open in the current directory |
-| `editor` | Editor command for Open in editor. Empty for your Omarchy default editor |
-| `agent` | Command Open ... here runs in a terminal. Empty for Claude Code |
+| `editorChoice` | Open in editor: empty to ask the first time, `omarchy` for Omarchy's default, `omafile` for Omafile's own editor, `own` for `editor` |
+| `editor` | Editor command, used when `editorChoice` is `own` |
+| `agent` | Command Open ... here runs in a terminal. Empty for your Omarchy default agent, then Claude Code |
 | `showTransferBadge` | Show a progress ring on the bar icon while a transfer runs |
 | `showDrives` | Show the Drives section in the sidebar |
 | `thumbnails` | Show image previews and thumbnails |
+| `previewSize` | Space preview size: `auto` (the default, matches your screen), `1024`, `2048`, `4096` or `7680` |
 | `glyph` | Custom icon for the bar widget |
 | `mode` | `files` for the file manager icon, `trash` for a trash can |
 | `trashConfirm` | Ask before a right click empties the trash |

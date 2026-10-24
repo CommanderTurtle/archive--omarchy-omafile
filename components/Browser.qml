@@ -364,7 +364,12 @@ Item {
   function close() {
     root.closeRequested()
   }
+  readonly property bool holdsUnsaved: textEditor.dirty
   function requestClose() {
+    if (textEditor.dirty) {
+      textEditor.requestClose()
+      return
+    }
     if (pickerRequest) answerPick({ ok: false })
     rememberSession()
     root.dismissRequested()
@@ -375,9 +380,12 @@ Item {
   readonly property bool pickSaving: picking && (pick.mode === "save" || pick.mode === "savefiles")
   readonly property bool pickNeedsName: picking && pick.mode === "save"
   property int pickFilter: -1
+  property bool pickInputHeld: false
+  property bool pickTypedEarly: false
+  readonly property int pickKeyDelay: 600
   readonly property var pickBlockedActions: ({
     cut: true, paste: true, rename: true, trash: true, delete: true, restore: true, emptytrash: true,
-    extract: true, compress: true, transcode: true, properties: true, newfile: true, terminal: true, agent: true,
+    extract: true, compress: true, transcode: true, edittext: true, duplicates: true, properties: true, newfile: true, terminal: true, agent: true,
     openwith: true, editor: true, undo: true, redo: true, drop: true, transfer: true,
     "place:emptytrash": true, "place:properties": true
   })
@@ -477,12 +485,32 @@ Item {
     var name = String(pick.currentName || "")
     if (!name && pick.currentFile) name = Model.basename(String(pick.currentFile))
     pickNameField.text = name
-    if (pickNeedsName) {
-      pickNameField.forceActiveFocus()
-      var dot = name.lastIndexOf(".")
-      if (dot > 0) pickNameField.select(0, dot)
-      else pickNameField.selectAll()
-    } else keyCatcher.forceActiveFocus()
+    keyCatcher.forceActiveFocus()
+    pickTypedEarly = false
+    pickInputHeld = true
+    pickHoldTimer.restart()
+  }
+
+  function holdPickKey() {
+    pickTypedEarly = true
+    pickHoldTimer.restart()
+  }
+
+  function releasePickInput() {
+    pickInputHeld = false
+    if (!picking) return
+    if (pickTypedEarly)
+      statusText = pickNeedsName ? "Ignored typing from before the chooser opened. Click the name to type one"
+        : "Ignored typing from before the chooser opened"
+    else if (pickNeedsName) focusPickName()
+  }
+
+  function focusPickName() {
+    var name = String(pickNameField.text || "")
+    pickNameField.forceActiveFocus()
+    var dot = name.lastIndexOf(".")
+    if (dot > 0) pickNameField.select(0, dot)
+    else pickNameField.selectAll()
   }
 
   function completePick(paths) {
@@ -511,7 +539,7 @@ Item {
   }
 
   function acceptPick(entries) {
-    if (!picking) return
+    if (!picking || pickInputHeld) return
     var p = activePane()
     if (pick.mode === "save") {
       var name = String(pickNameField.text || "").trim()
@@ -580,6 +608,10 @@ Item {
   }
   function showDialog(mode, title, value, payload) {
     if (dialogMode === "unlock") forgetUnlock()
+    if (mode === "settings") {
+      editorOwnTyping = false
+      if (service) service.refreshDefaults()
+    }
     dialogMode = mode
     dialogTitle = title
     dialogValue = value || ""
@@ -615,13 +647,14 @@ Item {
       } else if (dialogMode === "unlock") {
         root.forgetPassphrase()
         unlockField.forceActiveFocus()
+      } else if (dialogMode === "editorpick") {
+        editorCustomField.text = ""
+        keyCatcher.forceActiveFocus()
       }
     })
   }
   function forgetPassphrase() {
     unlockField.text = ""
-    unlockField.editUndo = []
-    unlockField.editRedo = []
   }
   function forgetUnlock() {
     forgetPassphrase()
@@ -700,6 +733,17 @@ Item {
   }
   function submitDialog() {
     var p = activePane()
+    if (dialogMode === "transcode") {
+      var job = dialogPayload
+      closeDialog()
+      if (!job || !job.targets || job.targets.length === 0) return
+      var remembered = {}
+      for (var k in transcodeLast) remembered[k] = transcodeLast[k]
+      remembered[job.kind] = { format: transcodeFormat, size: transcodeResolution }
+      transcodeLast = remembered
+      transcodeNow(job.targets)
+      return
+    }
     var value = String(dialogField.text || "").trim()
     if (dialogMode === "path") {
       closeDialog()
@@ -991,13 +1035,27 @@ Item {
     return boolSetting("extractOnOpen", false) && Model.isArchive(entry)
   }
 
-  function archiveTargets(entry) {
+  function selectionTargets(entry) {
+    if (!entry) return []
     var p = activePane()
     var sel = p ? p.selectedEntries : []
+    for (var i = 0; i < sel.length; i++) if (sel[i].path === entry.path) {
+      var out = []
+      for (var j = 0; j < sel.length; j++) out.push(sel[j])
+      return out
+    }
+    return [entry]
+  }
+
+  function targetPaths(entries) {
+    var out = []
+    for (var i = 0; i < entries.length; i++) out.push(entries[i].path)
+    return out
+  }
+
+  function archiveTargets(entry) {
+    var source = selectionTargets(entry)
     var list = []
-    var inSelection = false
-    for (var i = 0; i < sel.length; i++) if (entry && sel[i].path === entry.path) inSelection = true
-    var source = inSelection ? sel : (entry ? [entry] : [])
     for (var j = 0; j < source.length; j++) if (Model.isArchive(source[j])) list.push(source[j])
     return list
   }
@@ -1088,42 +1146,54 @@ Item {
     })
   }
 
-  function openWithTargets(entry) {
-    var p = activePane()
-    if (!entry) return []
-    if (!p) return [entry]
-    var sel = p.selectedEntries
-    for (var i = 0; i < sel.length; i++) if (sel[i].path === entry.path) return sel
-    return [entry]
+  property string transcodeFormat: "jpg"
+  property string transcodeResolution: "medium"
+  property var transcodeLast: ({})
+  readonly property var transcodeChoices: ({
+    picture: {
+      formats: [{ label: "JPG, smaller", value: "jpg" }, { label: "PNG, lossless", value: "png" },
+        { label: "WebP, small, keeps transparency", value: "webp" }, { label: "AVIF, smallest, keeps transparency", value: "avif" },
+        { label: "JPEG XL, small, best for keeping", value: "jxl" }],
+      sizes: [{ label: "High, up to 3160 px wide", value: "high" }, { label: "Medium, up to 2160 px wide", value: "medium" },
+        { label: "Low, up to 1080 px wide", value: "low" }, { label: "Original size", value: "original" }],
+      format: "jpg", size: "medium"
+    },
+    video: {
+      formats: [{ label: "MP4, plays anywhere", value: "mp4" }, { label: "GIF, for chat and docs", value: "gif" }],
+      sizes: [{ label: "4K", value: "4k" }, { label: "1080p", value: "1080p" }, { label: "720p", value: "720p" },
+        { label: "Original size", value: "original" }],
+      format: "mp4", size: "1080p"
+    }
+  })
+
+  function allJpeg(targets) {
+    for (var i = 0; i < targets.length; i++) {
+      var ext = String(targets[i].ext || "").toLowerCase()
+      if (ext !== "jpg" && ext !== "jpeg") return false
+    }
+    return targets.length > 0
+  }
+
+  function transcodeSizeOptions() {
+    if (dialogMode !== "transcode" || !dialogPayload) return []
+    var sizes = transcodeChoices[dialogPayload.kind].sizes
+    if (dialogPayload.kind !== "picture" || transcodeFormat !== "jxl" || !allJpeg(dialogPayload.targets)) return sizes
+    return sizes.concat([{ label: "Lossless repack of the JPG, can be turned back exactly", value: "lossless" }])
+  }
+
+  function setTranscodeFormat(value) {
+    transcodeFormat = value
+    if (transcodeResolution === "lossless" && (value !== "jxl" || !dialogPayload || !allJpeg(dialogPayload.targets)))
+      transcodeResolution = "original"
   }
 
   function transcodeTargets(entry) {
-    var list = openWithTargets(entry)
+    var kind = Model.transcodeKind(entry)
+    var p = activePane()
+    if (!kind || !p || p.virtualView || paneInTrash(p)) return []
+    var source = selectionTargets(entry)
     var out = []
-    for (var i = 0; i < list.length; i++)
-      if (Model.isTranscodable(list[i])) out.push(list[i])
-    return out
-  }
-
-  function transcodeResolutionLadder(width, height) {
-    var long = Math.max(Number(width) || 0, Number(height) || 0)
-    if (long <= 0) return []
-    var out = [{ label: String(long) + "x", value: String(long) }]
-    for (var i = 0; i < transcodeRungs.length; i++) {
-      var rung = transcodeRungs[i]
-      if (rung < long) out.push({ label: String(rung) + "x", value: String(rung) })
-    }
-    return out
-  }
-
-  function transcodeVideoResolutionLadder(height) {
-    var h = Number(height) || 0
-    if (h <= 0) return []
-    var out = [{ label: String(h) + "p", value: String(h) }]
-    for (var i = 0; i < transcodeRungs.length; i++) {
-      var rung = transcodeRungs[i]
-      if (rung < h) out.push({ label: String(rung) + "p", value: String(rung) })
-    }
+    for (var i = 0; i < source.length; i++) if (Model.transcodeKind(source[i]) === kind) out.push(source[i])
     return out
   }
 
@@ -1131,105 +1201,221 @@ Item {
     if (!pickAllows("transcode")) return
     var targets = transcodeTargets(entry)
     if (targets.length === 0) return
-    var title = "Transcode " + (targets.length === 1 ? targets[0].name : Model.formatCount(targets.length, "item", "items"))
-    function openDialog() {
-      showDialog("transcode", title, "", { targets: targets })
-    }
-    if (Model.transcodeMediaType(targets[0]) === "video") {
-      transcodeIsVideo = true
-      transcodeAxis = ""
-      transcodeFormats = [{ label: "MP4, plays anywhere", value: "mp4" }, { label: "GIF, for chat and docs", value: "gif" }]
-      transcodeFormat = "mp4"
-      service.imageSize(targets[0].path, function (m) {
-        var ladder = transcodeVideoResolutionLadder(m.height)
-        if (ladder.length === 0) {
-          transcodeResolutions = [{ label: "2160p", value: "2160" }, { label: "1080p", value: "1080" }, { label: "720p", value: "720" }]
-          transcodeResolution = "1080"
-        } else {
-          transcodeResolutions = ladder
-          transcodeResolution = ladder[0].value
-        }
-        openDialog()
-      }, function () {
-        transcodeResolutions = [{ label: "2160p", value: "2160" }, { label: "1080p", value: "1080" }, { label: "720p", value: "720" }]
-        transcodeResolution = "1080"
-        openDialog()
-      })
-      return
-    }
-    transcodeIsVideo = false
-    transcodeFormats = [
-      { label: "JPG", value: "jpg" },
-      { label: "PNG, lossless", value: "png" },
-      { label: "WebP, modern", value: "webp" },
-      { label: "AVIF, smallest", value: "avif" }
-    ]
-    transcodeFormat = "jpg"
-    transcodeTier = "high"
-    transcodeAxis = ""
-    service.imageSize(targets[0].path, function (m) {
-      var ladder = transcodeResolutionLadder(m.width, m.height)
-      if (ladder.length === 0) {
-        ladder = [{ label: "3160x", value: "3160" }, { label: "2160x", value: "2160" }, { label: "1080x", value: "1080" }]
-        transcodeResolution = "2160"
-      } else {
-        transcodeResolution = ladder[0].value
-      }
-      transcodeResolutions = ladder
-      openDialog()
-    }, function () {
-      transcodeResolutions = [{ label: "3160x", value: "3160" }, { label: "2160x", value: "2160" }, { label: "1080x", value: "1080" }]
-      transcodeResolution = "2160"
-      openDialog()
-    })
+    var kind = Model.transcodeKind(entry)
+    var last = transcodeLast[kind] || transcodeChoices[kind]
+    transcodeFormat = last.format
+    transcodeResolution = last.size === "lossless" && (last.format !== "jxl" || !allJpeg(targets)) ? "original" : last.size
+    showDialog("transcode", "Transcode " + (targets.length === 1 ? targets[0].name : Model.formatCount(targets.length, "item", "items")),
+      "", { kind: kind, targets: targets })
   }
 
   function transcodeNow(targets) {
     var p = activePane()
-    var paths = []
-    for (var i = 0; i < targets.length; i++) paths.push(targets[i].path)
-    statusText = "Transcoding " + Model.formatCount(targets.length, "item", "items")
-    if (transcodeIsVideo)
-      service.transcodePaths(paths, transcodeFormat, transcodeResolution, function (m) {
-        var outputs = m.outputs || []
-        root.statusText = "Transcoded " + Model.formatCount(outputs.length, "file", "files")
-        p.refresh()
-        if (outputs.length === 1) {
-          selectTimer.pendingName = Model.basename(String(outputs[0]))
-          selectTimer.pendingPane = p
-          selectTimer.restart()
-        }
-      }, function (m) {
-        root.statusText = m && m.code === "ECANCELED" ? "Transcoding cancelled"
-          : "Could not transcode: " + String((m && m.message) || "")
-      })
-    else {
-      // Send only the walked axis; the CLI applies its defaults to the
-      // other one (input format / native size) and names the output after
-      // what was actually forced.
-      var f = transcodeFormat
-      var q = transcodeTier
-      var r = transcodeResolution
-      if (transcodeAxis === "codec") r = ""
-      else if (transcodeAxis === "resolution") { f = ""; q = "" }
-      service.transcodeQualityPaths(paths, f, q, r, function (m) {
-        var outputs = m.outputs || []
-        root.statusText = "Transcoded " + Model.formatCount(outputs.length, "file", "files")
-        p.refresh()
-        if (outputs.length === 1) {
-          selectTimer.pendingName = Model.basename(String(outputs[0]))
-          selectTimer.pendingPane = p
-          selectTimer.restart()
-        }
-      }, function (m) {
-        root.statusText = m && m.code === "ECANCELED" ? "Transcoding cancelled"
-          : "Could not transcode: " + String((m && m.message) || "")
-      })
-    }
+    statusText = "Transcoding " + (targets.length === 1 ? targets[0].name : Model.formatCount(targets.length, "item", "items"))
+    service.transcodePaths(targetPaths(targets), transcodeFormat, transcodeResolution, function (m) {
+      var outputs = m.outputs || []
+      var failed = (m.failures || []).length
+      root.statusText = "Transcoded " + Model.formatCount(outputs.length, "file", "files")
+        + (failed > 0 ? ", " + failed + " could not be" : "")
+      if (outputs.length === 0 || p.path !== Model.parentPath(String(outputs[0]))) return
+      p.refresh()
+      selectTimer.pendingName = Model.basename(String(outputs[0]))
+      selectTimer.pendingPane = p
+      selectTimer.restart()
+    }, function (m) {
+      root.statusText = m && m.code === "ECANCELED" ? "Transcoding cancelled"
+        : "Could not transcode: " + String((m && m.message) || "")
+    })
   }
 
   function afterLaunch() {
     if (popupMode) requestClose()
+  }
+
+  function editText(entry) {
+    if (!entry || !service || !pickAllows("edittext")) return
+    if (!Model.textEditable(entry)) {
+      statusText = entry.isDir ? "Folders cannot be edited as text" : "Omafile only edits text files up to 1 MB"
+      return
+    }
+    closeMenu()
+    if (previewOpen) closePreview()
+    textEditor.openFile(entry.path, entry.name)
+  }
+
+  function findDuplicates(entry) {
+    if (!service || !pickAllows("duplicates")) return
+    var p = activePane()
+    closeMenu()
+    if (previewOpen) closePreview()
+    if (entry && !entry.isDir) {
+      var folder = Model.dirname(entry.path)
+      var look = home && Model.isWithin(entry.path, home) ? home : folder
+      duplicates.start(entry.path, look, p.showHidden)
+      return
+    }
+    duplicates.start("", entry && entry.isDir ? entry.path : (p.realPath || p.path), p.showHidden)
+  }
+
+  function revealFile(path) {
+    var p = activePane()
+    var folder = Model.dirname(path)
+    if (p.path !== folder) p.navigate(folder)
+    selectTimer.pendingName = Model.basename(path)
+    selectTimer.pendingPane = p
+    selectTimer.restart()
+  }
+
+  property string editorPick: "omarchy"
+  property bool editorPickAlso: false
+  property string editorPickError: ""
+  property bool editorOwnTyping: false
+  readonly property bool editorPickCanAlso: {
+    if (editorPick.indexOf("app:") !== 0 || !service) return false
+    var known = Model.knownEditor(editorPick.substring(4))
+    return known !== null && known.omarchy === true && known.id !== service.omarchyEditor
+  }
+  readonly property string editorSettingValue: {
+    if (!service) return ""
+    if (service.editorChoice === "omarchy") return "omarchy"
+    if (service.editorChoice === "omafile") return "omafile"
+    var command = service.editorCommand
+    if (!editorOwnTyping && command && Model.knownEditor(command) && service.programsFound[command] === true) return "app:" + command
+    return command || editorOwnTyping ? "own" : ""
+  }
+
+  function requestEditor(entries) {
+    if (!service || entries.length === 0) return
+    service.editorPlan(function (plan) {
+      if (plan.ask) {
+        root.askEditor(entries, String(plan.error || ""))
+        return
+      }
+      root.openInEditor(plan, entries)
+    })
+  }
+
+  function openInEditor(plan, entries) {
+    var paths = targetPaths(entries)
+    if (plan.mode === "omafile") {
+      if (entries.length === 1 && Model.textEditable(entries[0])) {
+        editText(entries[0])
+        return
+      }
+      service.launchEditor({ mode: "omarchy" }, paths)
+      statusText = "Opened in Omarchy's default editor. Omafile's editor edits one text file at a time"
+      afterLaunch()
+      return
+    }
+    service.launchEditor(plan, paths)
+    afterLaunch()
+  }
+
+  function askEditor(entries, badCommand) {
+    if (service) service.refreshDefaults()
+    editorPick = "omarchy"
+    editorPickAlso = false
+    editorPickError = badCommand ? "\u201c" + badCommand + "\u201d is not a command Omafile can find. Pick an editor instead." : ""
+    showDialog("editorpick", "Open in editor", "", { entries: entries })
+  }
+
+  function editorPickOptions() {
+    var out = [{ value: "omarchy", label: "Omarchy's default, " + Model.editorName(service ? service.omarchyEditor : "nvim"),
+      description: "Follows omarchy default editor" },
+      { value: "omafile", label: "Omafile's editor",
+        description: "Edits a text file right here. Folders and other files open in Omarchy's default" }]
+    var apps = service ? service.editorApps : []
+    for (var i = 0; i < apps.length; i++)
+      out.push({ value: "app:" + apps[i].id, label: apps[i].name, description: apps[i].terminal ? "Opens in your terminal" : "" })
+    out.push({ value: "own", label: "A command you type", description: "Anything on your PATH, such as code --new-window" })
+    return out
+  }
+
+  function chooseEditorPick(value) {
+    editorPick = value
+    editorPickAlso = false
+    if (value === "own") Qt.callLater(function () { editorCustomField.forceActiveFocus() })
+    else keyCatcher.forceActiveFocus()
+  }
+
+  function moveEditorPick(delta) {
+    var options = editorPickOptions()
+    var index = 0
+    for (var i = 0; i < options.length; i++) if (options[i].value === editorPick) index = i
+    chooseEditorPick(options[Math.max(0, Math.min(options.length - 1, index + delta))].value)
+  }
+
+  function finishEditorPick(job, plan) {
+    if (dialogMode === "editorpick" && dialogPayload === job) closeDialog()
+    openInEditor(plan, job.entries)
+  }
+
+  function submitEditorPick() {
+    var job = dialogPayload
+    if (!service || !job || !job.entries) return
+    if (editorPick === "omarchy" || editorPick === "omafile") {
+      applySettingNow("editorChoice", editorPick)
+      finishEditorPick(job, { mode: editorPick })
+      return
+    }
+    if (editorPick.indexOf("app:") === 0) {
+      var id = editorPick.substring(4)
+      if (editorPickAlso && editorPickCanAlso) service.setOmarchyEditor(id)
+      applySettingNow("editor", id)
+      applySettingNow("editorChoice", "own")
+      finishEditorPick(job, { mode: "own", command: id })
+      return
+    }
+    var typed = String(editorCustomField.text || "").trim()
+    if (!typed) {
+      editorPickError = "Type a command, or pick an editor."
+      return
+    }
+    service.checkProgram(typed, function (found) {
+      if (root.dialogMode !== "editorpick" || root.dialogPayload !== job) return
+      if (!found) {
+        root.editorPickError = "\u201c" + typed + "\u201d is not a command Omafile can find."
+        return
+      }
+      root.applySettingNow("editor", typed)
+      root.applySettingNow("editorChoice", "own")
+      root.finishEditorPick(job, { mode: "own", command: typed })
+    })
+  }
+
+  function editorSettingOptions() {
+    var out = [{ label: "Ask the first time", value: "" },
+      { label: "Omarchy's default, " + Model.editorName(service ? service.omarchyEditor : "nvim"), value: "omarchy" },
+      { label: "Omafile's editor", value: "omafile" }]
+    var apps = service ? service.editorApps : []
+    for (var i = 0; i < apps.length; i++) out.push({ label: apps[i].name, value: "app:" + apps[i].id })
+    out.push({ label: "A command you type", value: "own" })
+    return out
+  }
+
+  function chooseEditorSetting(value) {
+    editorOwnTyping = value === "own"
+    if (value === "") {
+      applySettingNow("editorChoice", "")
+      applySettingNow("editor", "")
+    } else if (value === "omarchy" || value === "omafile") applySettingNow("editorChoice", value)
+    else if (value.indexOf("app:") === 0) {
+      applySettingNow("editor", value.substring(4))
+      applySettingNow("editorChoice", "own")
+    } else applySettingNow("editorChoice", "own")
+  }
+
+  function saveEditorCommand(text) {
+    applySettingNow("editor", String(text || "").trim())
+    applySettingNow("editorChoice", "own")
+  }
+
+  function agentPlaceholder() {
+    if (!service) return ""
+    var fallback = Model.agentChoice("", service.omarchyAgent, service.omarchyAgentFound, service.claudeAvailable)
+    if (fallback.source === "omarchy") return "Omarchy's default, " + fallback.name
+    if (fallback.source === "claude") return "Claude Code"
+    return "None installed. Type a command"
   }
   function isBookmarked(path) {
     if (!service) return false
@@ -1249,9 +1435,9 @@ Item {
       items.push({ key: "open", label: "Open", glyph: Icons.actionGlyph("open"), hint: "Enter" })
       items.push({ key: "openwith", label: "Open with", glyph: Icons.actionGlyph("open") })
       items.push({ key: "editor", label: "Open in editor", glyph: Icons.actionGlyph("editor") })
-      // Ln.kr row: visible only when exactly one file is selected.
-      if (p.selectedCount === 1 && !entry.isDir && root.boolSetting("lnkrEnabled", false))
-        items.push({ key: "lnkr", label: "", glyph: "", kind: "lnkr" })
+      var inTrash = Model.isTrashPath(entry.path, trashRoot())
+      if (!inTrash && Model.textEditable(entry))
+        items.push({ key: "edittext", label: "Edit", glyph: Icons.actionGlyph("rename"), hint: "Ctrl+E" })
       if (entry.isDir)
         items.push({ key: "opentab", label: "Open in new tab", glyph: Icons.actionGlyph("add"), hint: "Ctrl+Enter" })
       else
@@ -1272,6 +1458,11 @@ Item {
         items.push({ key: "transcode", label: "Transcode\u2026", glyph: Icons.actionGlyph("extract") })
       if (compressTargets(entry).length > 0)
         items.push({ key: "compress", label: "Compress\u2026", glyph: Icons.actionGlyph("extract") })
+      if (transcodeTargets(entry).length > 0)
+        items.push({ key: "transcode", label: "Transcode\u2026", glyph: Icons.actionGlyph("transcode") })
+      if (!inTrash && !p.virtualView && (entry.isDir || (!entry.isBroken && (Number(entry.size) || 0) > 0)))
+        items.push({ key: "duplicates", label: entry.isDir ? "Find duplicates in this folder" : "Find duplicates\u2026",
+          glyph: Icons.actionGlyph("copy") })
       if (entry.isDir) {
         items.push({
           key: "bookmark",
@@ -1306,6 +1497,8 @@ Item {
         glyph: Icons.placeGlyph("pinned")
       })
       items.push({ key: "copypath", label: "Copy path", glyph: Icons.actionGlyph("copy") })
+      if (!p.virtualView && !paneInTrash(p))
+        items.push({ key: "duplicates", label: "Find duplicates here", glyph: Icons.actionGlyph("copy") })
       items.push({ key: "refresh", label: "Refresh", glyph: Icons.actionGlyph("refresh"), hint: "F5" })
       if (paneInTrash(p)) {
         separator()
@@ -1578,23 +1771,12 @@ Item {
     else if (key.indexOf("view:") === 0) setView(key.substring(5))
     else if (key === "preview") showPreview(entry)
     else if (key === "open") {
-      var ot = entry ? openWithTargets(entry) : null
-      if (ot && ot.length > 1) openEntries(ot)
+      var several = selectionTargets(entry)
+      if (several.length > 1 && !picking) openSeveral(several)
       else p.openEntry(entry)
     }
-    else if (key === "openwith") {
-      var owt = entry ? openWithTargets(entry) : [entry]
-      showDialog("openwith", "Open " + (owt.length > 1 ? Model.formatCount(owt.length, "item", "items") : (entry ? entry.name : "")) + " with", "", entry)
-    }
-    else if (key === "editor") {
-      var et = entry ? openWithTargets(entry) : null
-      if (et && et.length > 1 && !et[0].isDir) {
-        var epaths = []
-        for (var i = 0; i < et.length; i++) epaths.push(et[i].path)
-        service.openEditorFiles(epaths)
-      } else service.openEditor(entry ? entry.path : p.path)
-      afterLaunch()
-    }
+    else if (key === "openwith") showDialog("openwith", "Open " + openWithLabel(entry) + " with", "", entry)
+    else if (key === "editor") requestEditor(entry ? selectionTargets(entry) : [{ path: p.path, name: Model.basename(p.path), isDir: true }])
     else if (key === "opentab") newTab(activeSide, entry.path)
     else if (key === "copy") doCopy()
     else if (key === "cut") doCut()
@@ -1608,6 +1790,9 @@ Item {
     else if (key === "extract") extractArchives(archiveTargets(entry))
     else if (key === "transcode") askTranscode(entry)
     else if (key === "compress") askCompress(entry)
+    else if (key === "transcode") askTranscode(entry)
+    else if (key === "edittext") editText(entry)
+    else if (key === "duplicates") findDuplicates(entry)
     else if (key === "properties") showProperties(entry)
     else if (key === "newfolder") showDialog("newfolder", "New folder", "untitled folder", null)
     else if (key === "newfile") showDialog("newfile", "New file", "untitled", null)
@@ -1769,7 +1954,61 @@ Item {
     previewOpen = false
     previewEntry = null
     previewText = ""
+    resetPreviewZoom()
     keyCatcher.forceActiveFocus()
+  }
+
+  property real previewZoom: 1
+  property real previewPanX: 0
+  property real previewPanY: 0
+  readonly property real previewZoomMax: 8
+  onPreviewEntryChanged: {
+    previewPanX = 0
+    previewPanY = 0
+  }
+
+  function resetPreviewZoom() {
+    previewZoom = 1
+    previewPanX = 0
+    previewPanY = 0
+  }
+
+  readonly property int previewSide: Model.previewSide(textSetting("previewSize", "auto"),
+    Math.max(previewBody.width, previewBody.height) * Screen.devicePixelRatio)
+  readonly property bool previewImageReady: previewImage.status === Image.Ready
+    || (previewBase.active && previewBase.status === Image.Ready)
+  readonly property bool previewImageFailed: previewImage.failed && (!previewBase.active || previewBase.failed)
+
+  function previewPaintedSize(zoom) {
+    var shown = previewImage.status === Image.Ready ? previewImage : previewBase
+    var w = shown.implicitWidth
+    var h = shown.implicitHeight
+    if (w <= 0 || h <= 0 || previewBody.width <= 0 || previewBody.height <= 0) return { w: 0, h: 0 }
+    var fit = Math.min(previewBody.width / w, previewBody.height / h)
+    return { w: w * fit * zoom, h: h * fit * zoom }
+  }
+
+  function panPreview(x, y) {
+    var size = previewPaintedSize(previewZoom)
+    var maxX = Math.max(0, (size.w - previewBody.width) / 2)
+    var maxY = Math.max(0, (size.h - previewBody.height) / 2)
+    previewPanX = Math.max(-maxX, Math.min(maxX, x))
+    previewPanY = Math.max(-maxY, Math.min(maxY, y))
+  }
+
+  function zoomPreviewAt(factor, px, py) {
+    var old = previewZoom
+    var next = Math.max(1, Math.min(previewZoomMax, old * factor))
+    if (next === old) return
+    if (next === 1) {
+      resetPreviewZoom()
+      return
+    }
+    var keep = 1 - next / old
+    var dx = px - (previewBody.width / 2 + previewPanX)
+    var dy = py - (previewBody.height / 2 + previewPanY)
+    previewZoom = next
+    panPreview(previewPanX + dx * keep, previewPanY + dy * keep)
   }
 
   function stepPreview(delta) {
@@ -1795,6 +2034,17 @@ Item {
     var p = activePane()
     if (event.key === Qt.Key_Escape || event.key === Qt.Key_Space) { closePreview(); return true }
     if (previewKind === "audio" && handleAudioKey(event)) return true
+    if (previewKind === "image") {
+      if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) {
+        zoomPreviewAt(1.25, previewBody.width / 2, previewBody.height / 2)
+        return true
+      }
+      if (event.key === Qt.Key_Minus) {
+        zoomPreviewAt(0.8, previewBody.width / 2, previewBody.height / 2)
+        return true
+      }
+      if (event.key === Qt.Key_0) { resetPreviewZoom(); return true }
+    }
     if (event.key === Qt.Key_Right) { stepPreview(1); return true }
     if (event.key === Qt.Key_Left) { stepPreview(-1); return true }
     if (event.key === Qt.Key_Down) { stepPreview(p.columnsPerRow()); return true }
@@ -2063,6 +2313,10 @@ Item {
     var p = activePane()
     var sel = p.selectedEntries
     if (sel.length <= 1 || picking) { p.activateCursor(); return }
+    openSeveral(sel)
+  }
+
+  function openSeveral(sel) {
     if (sel.length > openConfirmLimit) {
       confirmAction = "openmany"
       confirm.message = "Open " + Model.formatCount(sel.length, "item", "items") + "?"
@@ -2084,6 +2338,7 @@ Item {
       else files.push(sel[i].path)
     }
     for (var d = 0; d < dirs.length; d++) newTab(activeSide, dirs[d])
+    if (files.length > 0 && service) service.openExternallyFiles(files)
     extractArchives(archives)
     if (files.length && service) service.openExternallyFiles(files)
     if (archives.length < sel.length) afterLaunch()
@@ -2185,16 +2440,18 @@ Item {
     appCursor = Math.max(floor, Math.min(list.length - 1, appCursor + delta))
   }
 
+  function openWithLabel(entry) {
+    var targets = selectionTargets(entry)
+    if (targets.length > 1) return Model.formatCount(targets.length, "item", "items")
+    return entry ? entry.name : ""
+  }
+
   function runTypedCommand() {
     var entry = dialogPayload
     var typed = appFilter
     closeDialog()
     if (!entry || !service) return
-    var targets = openWithTargets(entry)
-    var tpaths = []
-    for (var i = 0; i < targets.length; i++) tpaths.push(targets[i].path)
-    lastLaunchMs = Date.now()
-    service.runCommandOnFiles(typed, tpaths)
+    service.runCommandOn(typed, targetPaths(selectionTargets(entry)))
     afterLaunch()
   }
 
@@ -2210,16 +2467,12 @@ Item {
 
   function launchApp(app) {
     if (!app) return
-    var command = Array.prototype.slice.call(app.command || [])
+    var command = service ? service.appCommand(app) : []
     var inTerminal = app.runInTerminal === true
     var entry = dialogPayload
     closeDialog()
     if (!entry || !service) return
-    var targets = openWithTargets(entry)
-    var tpaths = []
-    for (var i = 0; i < targets.length; i++) tpaths.push(targets[i].path)
-    lastLaunchMs = Date.now()
-    service.openWithFiles(command, tpaths, inTerminal)
+    service.openWith(command, targetPaths(selectionTargets(entry)), inTerminal)
     if (appAlways && app.id && !entry.isDir)
       service.setDefaultApp(entry.path, String(app.id), null, function (m) {
         root.statusText = "Could not set the default app: " + String((m && m.message) || "")
@@ -2228,7 +2481,16 @@ Item {
   }
 
   function handleKey(event) {
+    if (pickInputHeld) {
+      holdPickKey()
+      return true
+    }
     if (confirm.opened) return confirm.handleKey(event)
+    if (textEditor.open) {
+      textEditor.focusEditor()
+      return true
+    }
+    if (duplicates.open) return duplicates.handleKey(event)
     if (dialogMode === "conflict") {
       if (Date.now() - conflictShownMs < conflictKeyDelay) return true
       if (event.key === Qt.Key_Escape) { resolveConflict("skip", false); return true }
@@ -2255,8 +2517,14 @@ Item {
       if (event.key === Qt.Key_Up) { moveAppCursor(-1); return true }
       if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { chooseApp(); return true }
     }
-    if (dialogMode === "transcode") {
-      if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { submitDialog(); return true }
+    if (dialogMode === "editorpick") {
+      if (event.key === Qt.Key_Down) { moveEditorPick(1); return true }
+      if (event.key === Qt.Key_Up) { moveEditorPick(-1); return true }
+      if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { submitEditorPick(); return true }
+    }
+    if (dialogMode === "transcode" && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+      submitDialog()
+      return true
     }
     if (dialogMode === "settings" || dialogMode === "shortcuts" || dialogMode === "properties") {
       if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { closeDialog(); return true }
@@ -2366,6 +2634,7 @@ Item {
     if (ctrl && event.key === Qt.Key_O) { openSelectedItems(); return true }
     if (ctrl && event.key === Qt.Key_T) { newTab(activeSide, null); return true }
     if (ctrl && event.key === Qt.Key_Period) { if (!p.virtualView && pickAllows("terminal")) service.openTerminal(p.path); return true }
+    if (ctrl && !shiftKey && !alt && event.key === Qt.Key_E) { editText(p.cursorEntry()); return true }
     if (ctrl && event.key === Qt.Key_W) { closeTab(activeSide, activeIndexFor(activeSide)); return true }
     if (ctrl && event.key === Qt.Key_Q) { requestClose(); return true }
     if (ctrl && event.key === Qt.Key_L) { pathBar.beginEdit(); return true }
@@ -2431,6 +2700,12 @@ Item {
       return true
     }
     return false
+  }
+  Timer {
+    id: pickHoldTimer
+    interval: root.pickKeyDelay
+    repeat: false
+    onTriggered: root.releasePickInput()
   }
   Timer {
     id: selectTimer
@@ -2870,6 +3145,8 @@ Item {
           Button {
             objectName: "pickAccept"
             anchors.verticalCenter: parent.verticalCenter
+            enabled: !root.pickInputHeld
+            opacity: enabled ? 1 : 0.4
             text: root.pickAcceptLabel()
             bordered: true
             selected: true
@@ -3374,16 +3651,64 @@ Item {
           clip: true
 
           ThumbImage {
+            id: previewBase
+            objectName: "previewBase"
+            width: previewBody.width * root.previewZoom
+            height: previewBody.height * root.previewZoom
+            x: (previewBody.width - width) / 2 + root.previewPanX
+            y: (previewBody.height - height) / 2 + root.previewPanY
+            service: root.service
+            active: root.previewOpen && root.previewKind === "image" && root.previewSide > 1024
+            entry: active ? root.previewEntry : null
+            generated: active && root.previewThumbable()
+            requestSize: 1024
+            sourceSize.width: requestSize
+            sourceSize.height: requestSize
+            visible: String(source) !== "" && status === Image.Ready && previewImage.status !== Image.Ready
+          }
+
+          ThumbImage {
             id: previewImage
             objectName: "previewImage"
-            anchors.fill: parent
+            width: previewBody.width * root.previewZoom
+            height: previewBody.height * root.previewZoom
+            x: (previewBody.width - width) / 2 + root.previewPanX
+            y: (previewBody.height - height) / 2 + root.previewPanY
             service: root.service
             active: root.previewOpen && root.previewKind === "image" && !root.fullResPreview
             entry: active ? root.previewEntry : null
             generated: active && root.previewThumbable()
-            requestSize: 1024
-            sourceSize.width: Math.max(1, previewBody.width * 2)
-            sourceSize.height: Math.max(1, previewBody.height * 2)
+            requestSize: root.previewSide
+            sourceSize.width: requestSize
+            sourceSize.height: requestSize
+            cache: requestSize <= 1024
+          }
+
+          MouseArea {
+            id: previewZoomArea
+            objectName: "previewZoomArea"
+            anchors.fill: parent
+            enabled: root.previewOpen && root.previewKind === "image" && root.previewImageReady
+            acceptedButtons: Qt.LeftButton
+            cursorShape: root.previewZoom > 1 ? (pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor) : Qt.ArrowCursor
+            property real startX: 0
+            property real startY: 0
+            property real startPanX: 0
+            property real startPanY: 0
+            onPressed: function (mouse) {
+              startX = mouse.x
+              startY = mouse.y
+              startPanX = root.previewPanX
+              startPanY = root.previewPanY
+            }
+            onPositionChanged: function (mouse) {
+              if (pressed && root.previewZoom > 1) root.panPreview(startPanX + mouse.x - startX, startPanY + mouse.y - startY)
+            }
+            onDoubleClicked: root.resetPreviewZoom()
+            onWheel: function (wheel) {
+              var steps = wheel.angleDelta.y / 120
+              if (steps !== 0) root.zoomPreviewAt(Math.pow(1.25, steps), wheel.x, wheel.y)
+            }
           }
 
           Image {
@@ -3463,7 +3788,7 @@ Item {
             spacing: Style.space(10)
             visible: root.previewKind === "folder" || root.previewKind === "none" || root.previewKind === "remoteaudio"
               || (root.previewKind === "text" && (root.previewBinary || root.previewLoading))
-              || (root.previewKind === "image" && (root.fullResPreview ? previewFullImage.status !== Image.Ready : previewImage.status !== Image.Ready))
+              || (root.previewKind === "image" && !root.previewImageReady)
               || (root.previewKind === "audio" && audioPreview.status === Loader.Error)
 
             Text {
@@ -3479,8 +3804,7 @@ Item {
               textFormat: Text.PlainText
               anchors.horizontalCenter: parent.horizontalCenter
               text: root.previewLoading ? "Reading"
-                : (root.previewKind === "image" && root.fullResPreview && previewFullImage.status !== Image.Ready ? "Loading"
-                : (root.previewKind === "image" && !previewImage.failed && root.previewThumbable() ? "Making a preview"
+                : (root.previewKind === "image" && !root.previewImageFailed && root.previewThumbable() ? "Making a preview"
                 : (root.previewKind === "image" ? "No preview for this image. Turn on Previews and thumbnails, or install a thumbnailer for it"
                 : (root.previewKind === "folder" ? "Folder. Press Enter to open it."
                   : (root.previewKind === "remoteaudio" ? "Audio preview is off for network folders. Press Enter to open it."
@@ -3492,6 +3816,32 @@ Item {
             }
           }
         }
+      }
+    }
+
+    TextEditorView {
+      id: textEditor
+      service: root.service
+      home: root.home
+      onClosed: keyCatcher.forceActiveFocus()
+      onSavedFile: function (saved) {
+        var p = root.activePane()
+        if (p && p.path === Model.dirname(saved)) p.refresh()
+      }
+    }
+
+    DuplicatesView {
+      id: duplicates
+      service: root.service
+      home: root.home
+      thumbnails: root.boolSetting("thumbnails", true) && !root.picking
+      onClosed: keyCatcher.forceActiveFocus()
+      onOpenPath: function (path) {
+        if (root.service) root.service.openExternally(path)
+      }
+      onReveal: function (path) {
+        duplicates.close()
+        root.revealFile(path)
       }
     }
 
@@ -3571,56 +3921,37 @@ Item {
             onChanged: function (v) { root.compressFormat = v }
           }
 
-          Button {
-            objectName: "transcodeCodecButton"
-            width: parent.width
-            visible: root.dialogMode === "transcode"
-            text: "Codec"
-            bordered: true
-            onClicked: root.transcodeAxis = (root.transcodeAxis === "codec") ? "" : "codec"
-          }
-
-          Button {
-            objectName: "transcodeResolutionButton"
-            width: parent.width
-            visible: root.dialogMode === "transcode"
-            text: "Resolution"
-            bordered: true
-            onClicked: root.transcodeAxis = (root.transcodeAxis === "resolution") ? "" : "resolution"
-          }
-
           Dropdown {
             objectName: "transcodeFormat"
             width: parent.width
-            visible: root.dialogMode === "transcode" && root.transcodeAxis === "codec"
-            label: "Codec"
+            visible: root.dialogMode === "transcode"
+            label: "Format"
             value: root.transcodeFormat
-            options: root.transcodeFormats
-            onChanged: function (v) { root.transcodeFormat = v }
+            options: root.dialogMode === "transcode" && root.dialogPayload ? root.transcodeChoices[root.dialogPayload.kind].formats : []
+            onChanged: function (v) { root.setTranscodeFormat(v) }
           }
 
           Dropdown {
-            objectName: "transcodeQuality"
+            objectName: "transcodeSize"
             width: parent.width
-            visible: root.dialogMode === "transcode" && !root.transcodeIsVideo && root.transcodeAxis === "codec"
-            label: "Quality"
-            value: root.transcodeTier
-            options: [
-              { label: "High", value: "high" },
-              { label: "Medium", value: "medium" },
-              { label: "Low", value: "low" }
-            ]
-            onChanged: function (v) { root.transcodeTier = v }
-          }
-
-          Dropdown {
-            objectName: "transcodeResolution"
-            width: parent.width
-            visible: root.dialogMode === "transcode" && root.transcodeAxis === "resolution"
-            label: "Resolution"
+            visible: root.dialogMode === "transcode"
+            label: "Size"
             value: root.transcodeResolution
-            options: root.transcodeResolutions
+            options: root.transcodeSizeOptions()
             onChanged: function (v) { root.transcodeResolution = v }
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            width: parent.width
+            visible: root.dialogMode === "transcode"
+            text: root.transcodeResolution === "lossless"
+              ? "A new file is made next to each one. Nothing is replaced. A lossless repack keeps every pixel and the photo's metadata, so the JPG can be rebuilt exactly with djxl."
+              : "A new file is made next to each one. Nothing is replaced."
+            color: Util.alpha(Color.popups.text, 0.6)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
           }
 
           Text {
@@ -3636,6 +3967,7 @@ Item {
 
           EditField {
             id: appField
+            objectName: "appField"
             width: parent.width
             visible: root.dialogMode === "openwith"
             placeholderText: "Search applications or type a command"
@@ -3987,6 +4319,31 @@ Item {
                   }
 
                   Dropdown {
+                    objectName: "previewSizeSetting"
+                    width: parent.width
+                    label: "Image preview size"
+                    value: root.textSetting("previewSize", "auto")
+                    options: [
+                      { label: "Automatic, sharp on your screen", value: "auto" },
+                      { label: "1024 px, quickest", value: "1024" },
+                      { label: "2048 px", value: "2048" },
+                      { label: "4096 px, for 4K screens", value: "4096" },
+                      { label: "7680 px, for 8K pictures", value: "7680" }
+                    ]
+                    onChanged: function (v) { root.applySettingNow("previewSize", v) }
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    text: "The Space preview. Bigger is sharper when you zoom in, takes a few seconds the first time, and is kept in Omafile's cache. Automatic stops at 4096 px."
+                    color: Util.alpha(Color.popups.text, 0.5)
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.Wrap
+                  }
+
+                  Dropdown {
                     objectName: "dropActionSetting"
                     width: parent.width
                     label: "Drag and drop"
@@ -4142,11 +4499,22 @@ Item {
                     text: "Editor"
                   }
 
-                  EditField {
+                  Dropdown {
+                    objectName: "editorSetting"
                     width: parent.width
+                    showLabel: false
+                    value: root.editorSettingValue
+                    options: root.dialogMode === "settings" ? root.editorSettingOptions() : []
+                    onChanged: function (v) { root.chooseEditorSetting(v) }
+                  }
+
+                  EditField {
+                    objectName: "editorCommandField"
+                    width: parent.width
+                    visible: root.editorSettingValue === "own"
                     text: root.textSetting("editor", "")
-                    placeholderText: "Omarchy default"
-                    onAccepted: root.applySettingNow("editor", text)
+                    placeholderText: "For example code --new-window"
+                    onAccepted: root.saveEditorCommand(text)
                   }
 
                   PanelSectionHeader {
@@ -4156,15 +4524,16 @@ Item {
 
                   EditField {
                     width: parent.width
+                    objectName: "agentField"
                     text: root.textSetting("agent", "")
-                    placeholderText: "Claude Code"
+                    placeholderText: root.dialogMode === "settings" ? root.agentPlaceholder() : ""
                     onAccepted: root.applySettingNow("agent", text)
                   }
 
                   Text {
                     textFormat: Text.PlainText
                     width: parent.width
-                    text: "For example alacritty -e nvim, zeditor or omp. Press Enter to save."
+                    text: "Commands such as alacritty -e nvim or omp. Leave the agent empty to follow omarchy default agent. Press Enter to save."
                     color: Util.alpha(Color.popups.text, 0.5)
                     font.family: Style.font.family
                     font.pixelSize: Style.font.caption
@@ -4358,6 +4727,7 @@ Item {
 
             EditField {
               id: passwordField
+              objectName: "passwordField"
               width: parent.width
               visible: !root.connectAnonymous
               placeholderText: "Password"
@@ -4374,6 +4744,111 @@ Item {
               color: root.connectFailed ? Color.urgent : Util.alpha(Color.popups.text, 0.7)
               font.family: Style.font.family
               font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.Wrap
+            }
+          }
+
+          Column {
+            id: editorPickColumn
+            width: parent.width
+            visible: root.dialogMode === "editorpick"
+            spacing: Style.space(6)
+
+            Text {
+              textFormat: Text.PlainText
+              objectName: "editorPickMessage"
+              width: parent.width
+              text: root.editorPickError !== "" ? root.editorPickError
+                : "Pick how Omafile opens files in an editor. It remembers your choice."
+              color: root.editorPickError !== "" ? Color.urgent : Util.alpha(Color.popups.text, 0.7)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.Wrap
+            }
+
+            Repeater {
+              model: root.dialogMode === "editorpick" ? root.editorPickOptions() : []
+
+              delegate: Rectangle {
+                required property var modelData
+                objectName: "editorPick-" + modelData.value
+                width: editorPickColumn.width
+                height: pickLabels.implicitHeight + Style.space(12)
+                radius: Style.cornerRadius
+                color: root.editorPick === modelData.value
+                  ? Util.alpha(Color.accent, 0.18)
+                  : (pickHover.hovered ? Util.alpha(Color.foreground, 0.08) : "transparent")
+
+                HoverHandler { id: pickHover }
+
+                Column {
+                  id: pickLabels
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.leftMargin: Style.space(8)
+                  anchors.rightMargin: Style.space(8)
+                  anchors.verticalCenter: parent.verticalCenter
+
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    text: modelData.label
+                    color: Color.popups.text
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.body
+                    elide: Text.ElideRight
+                  }
+
+                  Text {
+                    textFormat: Text.PlainText
+                    width: parent.width
+                    visible: modelData.description !== ""
+                    text: modelData.description
+                    color: Util.alpha(Color.popups.text, 0.55)
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
+                }
+
+                MouseArea {
+                  anchors.fill: parent
+                  onClicked: root.chooseEditorPick(modelData.value)
+                  onDoubleClicked: {
+                    root.chooseEditorPick(modelData.value)
+                    if (modelData.value !== "own") root.submitEditorPick()
+                  }
+                }
+              }
+            }
+
+            EditField {
+              id: editorCustomField
+              objectName: "editorCustomField"
+              width: parent.width
+              visible: root.dialogMode === "editorpick" && root.editorPick === "own"
+              placeholderText: "For example code --new-window"
+              onAccepted: root.submitEditorPick()
+              Keys.onEscapePressed: root.closeDialog()
+            }
+
+            Toggle {
+              objectName: "editorPickAlso"
+              width: parent.width
+              visible: root.editorPickCanAlso
+              label: "Also make it Omarchy's default editor"
+              description: "Changes it for all of Omarchy, not just Omafile"
+              checked: root.editorPickAlso
+              onClicked: root.editorPickAlso = !root.editorPickAlso
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              text: "Change it later in Settings, under Commands."
+              color: Util.alpha(Color.popups.text, 0.5)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
               wrapMode: Text.Wrap
             }
           }
@@ -4505,16 +4980,17 @@ Item {
               opacity: enabled ? 1 : 0.4
               text: root.isReadOnlyDialog() ? "Close"
                 : (root.dialogMode === "connect" ? "Connect"
-                  : (root.dialogMode === "unlock" ? "Unlock"
+                  : (root.dialogMode === "unlock" ? "Unlock" : (root.dialogMode === "editorpick" ? "Open"
                     : (root.dialogMode === "openwith" ? "Open"
                       : (root.dialogMode === "compress" ? "Compress"
-                        : (root.dialogMode === "transcode" ? "Transcode" : "Confirm")))))
+                        : (root.dialogMode === "transcode" ? "Transcode" : "Confirm"))))))
               bordered: true
               onClicked: {
                 if (root.isReadOnlyDialog()) root.closeDialog()
                 else if (root.dialogMode === "openwith") root.chooseApp()
                 else if (root.dialogMode === "connect") root.submitConnect()
                 else if (root.dialogMode === "unlock") root.submitUnlock()
+                else if (root.dialogMode === "editorpick") root.submitEditorPick()
                 else root.submitDialog()
               }
             }
@@ -4607,6 +5083,7 @@ Item {
       { keys: "Ctrl+C / Ctrl+X / Ctrl+V", label: "Copy, cut and paste" },
       { keys: "Ctrl+Z / Ctrl+Shift+Z", label: "Undo and redo" },
       { keys: "F2", label: "Rename" },
+      { keys: "Ctrl+E", label: "Edit a text file in Omafile" },
       { keys: "Ctrl+Shift+N", label: "New folder" },
       { keys: "Ctrl+N", label: "New file" },
       { keys: "Delete", label: "Move to trash, or delete permanently inside the trash" },
@@ -4688,6 +5165,8 @@ Item {
         description: "Preview images at their original size instead of the 1024 px thumbnail" },
       { key: "rememberFolderViews", label: "Remember the view for each folder",
         description: "A folder opens in the view you last picked there. Other folders open in the default view" },
+      { key: "editorAutoSave", label: "Save edited text automatically", fallback: false,
+        description: "The text editor saves a second after you stop typing and when it closes. Apps that reload their config on save, like Hyprland, then apply each change as you type" },
       { key: "extractOnOpen", label: "Extract archives when opened", fallback: false,
         description: "Double click or Enter extracts zip, tar, 7z and rar files next to themselves instead of opening them in your default app" }
     ]

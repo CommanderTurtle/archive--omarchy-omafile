@@ -16,7 +16,8 @@ Image {
   property bool started: false
 
   readonly property string bucket: requestSize <= 256 ? "large"
-    : (requestSize <= 512 ? "x-large" : "xx-large")
+    : (requestSize <= 512 ? "x-large" : (requestSize <= 1024 ? "xx-large"
+      : (requestSize <= 2048 ? "preview-2048" : (requestSize <= 4096 ? "preview-4096" : "preview-7680"))))
   readonly property string requestKey: active && generated && entry && service
     ? bucket + "|" + entry.mtime + "|" + entry.path : ""
 

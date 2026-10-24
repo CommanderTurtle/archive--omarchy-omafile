@@ -21,7 +21,12 @@ function singleLine(text) {
   return String(text || '').replace(/\r\n|\r|\n|\t/g, ' ');
 }
 
-function remember(field) {
+function concealed(field, keys) {
+  return field.echoMode !== keys.Normal;
+}
+
+function remember(field, keys) {
+  if (concealed(field, keys)) return;
   var undo = field.editUndo || [];
   undo.push({ text: field.text, cursor: field.cursorPosition });
   if (undo.length > historyLimit) undo.shift();
@@ -50,10 +55,10 @@ function removeSelection(field) {
   return true;
 }
 
-function insertText(field, text) {
+function insertText(field, text, keys) {
   var clean = singleLine(text);
   if (clean === '' && field.selectionStart === field.selectionEnd) return;
-  remember(field);
+  remember(field, keys);
   removeSelection(field);
   field.insert(field.cursorPosition, clean);
 }
@@ -84,8 +89,8 @@ function wordEnd(text, pos) {
   return i;
 }
 
-function deleteBack(field, word) {
-  remember(field);
+function deleteBack(field, word, keys) {
+  remember(field, keys);
   if (removeSelection(field)) return;
   var pos = field.cursorPosition;
   if (pos <= 0) return;
@@ -93,8 +98,8 @@ function deleteBack(field, word) {
   field.remove(from, pos);
 }
 
-function deleteForward(field, word) {
-  remember(field);
+function deleteForward(field, word, keys) {
+  remember(field, keys);
   if (removeSelection(field)) return;
   var pos = field.cursorPosition;
   if (pos >= field.text.length) return;
@@ -109,13 +114,13 @@ function findClipboard(item) {
   return null;
 }
 
-function paste(field) {
+function paste(field, keys) {
   var source = field.clipboardSource || findClipboard(field);
   if (!source) return;
   var expected = field.text;
   source.readClipboardText(function (text) {
     if (!field || !field.visible || !field.activeFocus || field.text !== expected) return;
-    insertText(field, text);
+    insertText(field, text, keys);
   });
 }
 
@@ -127,41 +132,41 @@ function handleKey(field, event, keys) {
   var meta = (mods & keys.MetaModifier) !== 0;
   var key = event.key;
   if ((ctrl && !alt && key === keys.Key_V) || (shift && !ctrl && key === keys.Key_Insert)) {
-    paste(field);
+    paste(field, keys);
     return true;
   }
   if (ctrl && !alt && key === keys.Key_X) {
-    if (field.selectionEnd > field.selectionStart && field.echoMode === keys.Normal) {
+    if (field.selectionEnd > field.selectionStart && !concealed(field, keys)) {
       field.copy();
-      remember(field);
+      remember(field, keys);
       removeSelection(field);
     }
     return true;
   }
   if (ctrl && !alt && ((key === keys.Key_Z && shift) || key === keys.Key_Y)) {
-    restore(field, 'editRedo', 'editUndo');
+    if (!concealed(field, keys)) restore(field, 'editRedo', 'editUndo');
     return true;
   }
   if (ctrl && !alt && key === keys.Key_Z) {
-    restore(field, 'editUndo', 'editRedo');
+    if (!concealed(field, keys)) restore(field, 'editUndo', 'editRedo');
     return true;
   }
   if (key === keys.Key_Backspace) {
-    deleteBack(field, ctrl);
+    deleteBack(field, ctrl, keys);
     return true;
   }
   if (key === keys.Key_Delete && !shift) {
-    deleteForward(field, ctrl);
+    deleteForward(field, ctrl, keys);
     return true;
   }
   if (key === keys.Key_Delete && shift) {
-    if (field.selectionEnd > field.selectionStart && field.echoMode === keys.Normal) field.copy();
-    remember(field);
+    if (field.selectionEnd > field.selectionStart && !concealed(field, keys)) field.copy();
+    remember(field, keys);
     removeSelection(field);
     return true;
   }
   if (!ctrl && !meta && !alt && printable(event.text)) {
-    insertText(field, event.text);
+    insertText(field, event.text, keys);
     return true;
   }
   return false;

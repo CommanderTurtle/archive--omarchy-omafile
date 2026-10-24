@@ -192,6 +192,8 @@ QtObject {
     return 9
   }
   function isRemotePath(p) { return remoteRoots.some(function (r) { return Model.isWithin(p, r) }) }
+  function isGvfsPath(p) { return false }
+  function setUiVisible(v) {}
   function resolveConflict(id, action, all, seq) { record("resolveConflict", [id, action, all, seq]) }
   function transferOwner(id) { return null }
   function readClipboardText(onText) { record("readClipboardText", []); Qt.callLater(function () { onText(mock.clipboardText) }) }

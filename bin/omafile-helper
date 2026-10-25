@@ -4504,9 +4504,13 @@ def op_transcode(req, cancel_event):
         errfd, errfile = tempfile.mkstemp(prefix=".omafile-transcode-")
         os.close(errfd)
         try:
+            # Force the engine: this runs headless, so the CLI must not open
+            # its interactive engine menu (which needs the shell's
+            # OMARCHY_PATH). "gpu" probes for a hardware AV1 encoder and
+            # falls back to the cpu path when none is usable.
             proc = run_trusted("bash", ["-c",
-                "exec omarchy-transcode \"$1\" \"$2\" \"$3\" \"$4\" >\"$5\" 2>&1",
-                "omafile-transcode", path, fmt, qual, res, errfile], timeout=600)
+                "exec omarchy-transcode \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" >\"$6\" 2>&1",
+                "omafile-transcode", path, fmt, qual, res, "gpu", errfile], timeout=600)
             message = ""
             try:
                 with open(errfile, "r", encoding="utf-8", errors="replace") as fh:

@@ -146,6 +146,7 @@ test('formatDate branches', function () {
   assert.equal(Model.formatDate(yesterdaySeconds, now), 'Yesterday');
   assert.equal(Model.formatDate(sameYearSeconds, now), 'Jan 15');
   assert.equal(Model.formatDate(otherYearSeconds, now), '2024-03-04');
+  assert.equal(Model.formatDate(0, now), '');
 });
 
 test('formatFullDate formats with zero padded components', function () {

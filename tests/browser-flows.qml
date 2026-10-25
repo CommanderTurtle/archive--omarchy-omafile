@@ -1333,10 +1333,27 @@ ShellRoot {
         verify(outside.indexOf("Delete permanently") < 0, "permanent delete hides behind Shift")
         keyPress(Qt.Key_Shift)
         verify(menuLabels(browser.menuActions).indexOf("Delete permanently") >= 0, "Shift reveals permanent delete")
+        compare(browser.menuActions.filter(function (a) { return a && a.label === "Delete permanently" })[0].hint, "Shift+Delete")
         verify(menuLabels(browser.menuActions).indexOf("Move to trash") < 0)
         keyRelease(Qt.Key_Shift)
         verify(menuLabels(browser.menuActions).indexOf("Move to trash") >= 0, "releasing Shift restores trash")
         browser.closeMenu()
+
+        mock.gvfsRoot = "/tmp"
+        mock.calls = []
+        pane().setCursor(0, false, false)
+        browser.openMenuAtCursor()
+        var share = browser.menuActions
+        verify(menuLabels(share).indexOf("Move to trash") < 0, "a network share has no trash")
+        var del = share.filter(function (a) { return a && a.label === "Delete permanently" })[0]
+        verify(del !== undefined)
+        compare(del.hint, "Delete")
+        browser.closeMenu()
+        keyClick(Qt.Key_Delete)
+        compare(browser.confirmAction, "delete")
+        compare(mock.called("trashPaths"), null)
+        keyClick(Qt.Key_Escape)
+        mock.gvfsRoot = ""
       }
 
       function test_7_pickOpen() {

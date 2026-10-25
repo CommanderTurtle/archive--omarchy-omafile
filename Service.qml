@@ -32,6 +32,7 @@ Item {
   property var userDirs: ({})
   property int trashCount: 0
   property real trashBytes: 0
+  property bool uiVisible: false
   property var recent: []
   property var pinned: []
   property var bookmarkLabels: ({})
@@ -958,6 +959,12 @@ Item {
 
   property bool _drivesPending: false
 
+  function setUiVisible(visible) {
+    uiVisible = visible === true
+  }
+
+  onUiVisibleChanged: if (uiVisible) refreshDrives()
+
   function refreshDrives() {
     if (_drivesPending) return
     _drivesPending = true
@@ -1106,6 +1113,14 @@ Item {
       if (remote && Model.isWithin(p, String(d.mount))) return true
     }
     return false
+  }
+
+  function isGvfsPath(path) {
+    var p = String(path || "")
+    if (!p) return false
+    var runtime = Quickshell.env("XDG_RUNTIME_DIR") || ""
+    if (!runtime) return false
+    return Model.isWithin(p, runtime + "/gvfs")
   }
 
   function networkMounts() {
@@ -1343,16 +1358,50 @@ Item {
     return true
   }
 
-  function openTerminal(path) {
-    var configured = String(settingNow("terminal", "") || "").trim()
-    if (configured) Quickshell.execDetached(["sh", "-c", "cd \"$1\" && " + configured, "omafile", path])
-    else Quickshell.execDetached(["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--dir=" + path])
+  property Component delayTimer: Component { Timer { repeat: false } }
+
+  function after(ms, fn) {
+    var t = delayTimer.createObject(root, { interval: ms })
+    t.triggered.connect(function () { t.destroy(); fn() })
+    t.start()
   }
 
-  function openAgent(path) {
+  function launchWhenReachable(path, launch, onFail) {
+    if (!isGvfsPath(path)) { launch(); return }
+    var deadline = Date.now() + 10000
+    function probe() {
+      statPaths([path], function (items) {
+        var item = items && items[0]
+        if (item && !item.error) { launch(); return }
+        if (Date.now() < deadline) after(500, probe)
+        else if (onFail) onFail("This network folder did not become reachable in time")
+      })
+    }
+    probe()
+  }
+
+  function terminalArgv(path, command) {
+    if (isGvfsPath(path)) {
+      var script = command ? "cd \"$1\" && exec bash -c \"$2\"" : "cd \"$1\" && exec \"${SHELL:-bash}\""
+      var argv = ["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--", "sh", "-c", script, "omafile", path]
+      return command ? argv.concat([command]) : argv
+    }
+    var local = ["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--dir=" + path]
+    return command ? local.concat(["bash", "-c", command]) : local
+  }
+
+  function openTerminal(path, onFail) {
+    var configured = String(settingNow("terminal", "") || "").trim()
+    launchWhenReachable(path, function () {
+      if (configured) Quickshell.execDetached(["sh", "-c", "cd \"$1\" && " + configured, "omafile", path])
+      else Quickshell.execDetached(terminalArgv(path, ""))
+    }, onFail)
+  }
+
+  function openAgent(path, onFail) {
     if (!agentCommand) return
-    Quickshell.execDetached(["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--dir=" + path,
-      "bash", "-c", agentCommand + "; exec bash"])
+    var command = agentCommand + "; exec bash"
+    launchWhenReachable(path, function () { Quickshell.execDetached(terminalArgv(path, command)) }, onFail)
   }
 
   property string omarchyEditor: "nvim"
@@ -1956,7 +2005,7 @@ Item {
     id: drivesTimer
     interval: 15000
     repeat: true
-    running: true
+    running: root.uiVisible
     onTriggered: root.refreshDrives()
   }
 

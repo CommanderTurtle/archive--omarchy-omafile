@@ -1183,71 +1183,9 @@ Item {
     return id
   }
 
-  function transcodePaths(paths, format, resolution, engine, onDone, onError) {
-    var folder = Model.dirname(paths[0])
-    var record = {
-      id: 0, op: "transcode", label: resolution + " " + format, dest: folder, state: "running",
-      bytes: 0, total: 0, files: 0, filesTotal: paths.length, current: "", rate: 0,
-      errors: [], startedMs: Date.now(), finishedMs: 0, count: paths.length, from: folder
-    }
-    var id = request({ op: "transcode", paths: paths, format: format, resolution: resolution, engine: engine }, {
-      onData: function (m) {
-        if (m.t === "progress") updateTransfer(m.id, {
-          files: Number(m.files) || 0, current: String(m.current || "")
-        })
-      },
-      onDone: function (m) {
-        updateTransfer(m.id, { state: "done", result: String((m.outputs && m.outputs[0]) || "") })
-        trimTransferHistory()
-        if (onDone) onDone(m)
-      },
-      onError: function (m) {
-        updateTransfer(m.id, { state: m.code === "ECANCELED" ? "cancelled" : "failed", message: String(m.message || "") })
-        trimTransferHistory()
-        if (onError) onError(m)
-      }
-    })
-    record.id = id
-    var next = transfers.slice()
-    next.push(record)
-    transfers = next
-    return id
-  }
-
-  function transcodeQualityPaths(paths, format, quality, resolution, onDone, onError) {
-    var folder = Model.dirname(paths[0])
-    var record = {
-      id: 0, op: "transcode", label: [format, quality, resolution].filter(function (s) { return s }).join(" "), dest: folder, state: "running",
-      bytes: 0, total: 0, files: 0, filesTotal: paths.length, current: "", rate: 0,
-      errors: [], startedMs: Date.now(), finishedMs: 0, count: paths.length, from: folder
-    }
-    var id = request({ op: "transcode", paths: paths, format: format, quality: quality, resolution: resolution }, {
-      onData: function (m) {
-        if (m.t === "progress") updateTransfer(m.id, {
-          files: Number(m.files) || 0, current: String(m.current || "")
-        })
-      },
-      onDone: function (m) {
-        updateTransfer(m.id, { state: "done", result: String((m.outputs && m.outputs[0]) || "") })
-        trimTransferHistory()
-        if (onDone) onDone(m)
-      },
-      onError: function (m) {
-        updateTransfer(m.id, { state: m.code === "ECANCELED" ? "cancelled" : "failed", message: String(m.message || "") })
-        trimTransferHistory()
-        if (onError) onError(m)
-      }
-    })
-    record.id = id
-    var next = transfers.slice()
-    next.push(record)
-    transfers = next
-    return id
-  }
-
-  function imageSize(path, onReady, onError) {
-    return request({ op: "imagedims", path: path }, {
-      onDone: function (m) { if (onReady) onReady(m) },
+  function transcodePaths(paths, onDone, onError) {
+    return request({ op: "transcode", paths: paths }, {
+      onDone: function (m) { if (onDone) onDone(m) },
       onError: function (m) { if (onError) onError(m) }
     })
   }

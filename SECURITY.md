@@ -54,10 +54,15 @@ Only the latest release on `main` receives fixes.
 | `bsdtar` | Only when you extract or compress. Extracting reads the archive from an open file handle, refuses absolute paths and `..` entries, and goes into a private temporary folder handed over as an open folder handle, which is moved into place only when it succeeds. Compressing works inside the folder through an open handle, reads item names from standard input, writes to a new file on standard output, never follows symlinks, and never replaces an existing file |
 | `wl-copy`, `wl-paste` | Copy path, copy/cut files, paste files or images, and clipboard checks while cut markers are active |
 | `xdg-terminal-exec`, `omarchy-launch-editor` | Only when you choose Open in terminal, Open in editor, or the agent item such as Open Claude Code here |
+| `omarchy-launch-floating-terminal-with-presentation`, `omarchy-transcode` | Only when you choose Transcode. One floating terminal handles the selection, with the bin's own prompts |
 
 Helper tools use argument lists. Thumbnailer arguments come from trusted system `.thumbnailer` `Exec` definitions, parsed without a shell; file paths and URIs remain individual argument values. Executables resolve through `trusted_program` and launch with `trusted_env`, ignoring user `PATH` entries and injected environment variables. Thumbnailer definitions and their parent directories must be root owned, not symlinks, and not writable by group or others. Thumbnailers run unsandboxed with your permissions, so enable previews only for files you trust the installed decoders to handle.
 
 A configured terminal, editor or agent command is deliberately interpreted by a shell. The path is passed separately as an argument.
+
+Transcode deliberately follows Nautilus: its two commands resolve on the session `PATH`
+and inherit the session environment. Only the input paths are passed to the bin,
+quoted with `shlex.join` for the terminal wrapper. No encoding options come from Omafile.
 
 ## Owning org.freedesktop.FileManager1
 
@@ -74,7 +79,7 @@ A drive passphrase takes the same route: it reaches the helper as JSON on standa
 ## Trust model
 
 - File and directory names, symlink targets, and everything else read from disk are attacker controlled on a shared, removable, or network filesystem. Every `Text` in Omafile sets `textFormat: Text.PlainText`, so none of it is parsed as rich text or can load a remote image. `tests/plain-text.test.js` fails on any `Text` without it.
-- Paths are passed to the helper as JSON on standard input, never through a shell. Names that are not valid UTF-8 round trip as surrogate escapes; the shell escapes lone surrogates before writing a request, because Qt's `JSON.stringify` leaves them raw and they would otherwise turn into a different name.
+- Paths are passed to the helper as JSON on standard input. Transcode's explicit terminal handoff shell quotes each path; other file operations do not use a shell. Names that are not valid UTF-8 round trip as surrogate escapes; the shell escapes lone surrogates before writing a request, because Qt's `JSON.stringify` leaves them raw and they would otherwise turn into a different name.
 - The helper runs with your permissions and never escalates.
 - The only privileged step is installing `omafile.portal` when you turn on Pick files for other apps. `bin/omafile-portal-setup` runs `pkexec install -Dm644 /dev/stdin /usr/share/xdg-desktop-portal/portals/omafile.portal`, or `sudo` when run from a terminal without `pkexec`, as a fixed argument list with the fixed file contents on standard input. It is skipped when the file is already in place. Nothing else in Omafile uses `sudo`, `pkexec`, or polkit.
 - The `omarchy-shell omafile` IPC commands are available to any process running as your user.

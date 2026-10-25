@@ -4456,90 +4456,47 @@ def op_compress(req, cancel_event):
             except OSError:
                 pass
         os.close(pfd)
-TRANSCODE_FORMATS = ("jpg", "png", "webp", "avif", "mp4", "gif", "webm")
-TRANSCODE_QUALITIES = ("high", "medium", "low")
-TRANSCODE_RESOLUTIONS = ("high", "medium", "low", "4k", "1080p", "720p")
 
 
-def op_transcode(req, cancel_event):
+def op_transcode(req):
     req_id = req["id"]
     paths = req.get("paths")
-    fmt = req.get("format") or ""
-    qual = req.get("quality") or ""
-    res = req.get("resolution") or ""
-    engine = req.get("engine") or ""
-    res_ok = isinstance(res, str) and (
-        res in TRANSCODE_RESOLUTIONS or (res.isdigit() and int(res) > 0))
     if (not isinstance(paths, list) or not paths
-            or not all(isinstance(p, str) and os.path.isabs(p) for p in paths)
-            or (fmt != "" and fmt not in TRANSCODE_FORMATS)
-            or (qual != "" and qual not in TRANSCODE_QUALITIES)
-            or (res != "" and not res_ok)
-            or (engine not in ("", "gpu", "cpu"))
-            or (fmt == "" and res == "")):
-        send_error(req_id, "EINVAL",
-                   "absolute paths and a forced axis are required: a codec "
-                   "(format + quality) and/or a resolution (high, medium, low, "
-                   "4k, 1080p, 720p, or a pixel width)")
+            or not all(isinstance(p, str) and "\0" not in p and os.path.isabs(p) for p in paths)):
+        send_error(req_id, "EINVAL", "a list of absolute paths is required")
         return
-    try:
-        trusted_program("omarchy-transcode")
-    except FileNotFoundError:
-        send_error(req_id, "EUNSUPPORTED", "omarchy-transcode is not installed")
-        return
-    outputs = []
-    for index, raw in enumerate(paths):
-        if cancel_event is not None and cancel_event.is_set():
-            send_error(req_id, "ECANCELED", "cancelled")
-            return
-        path = os.path.normpath(raw)
+    paths = list(dict.fromkeys(paths))
+    for path in paths:
         if not os.path.isfile(path):
-            send_error(req_id, "ENOENT", "no such file", path)
+            send_error(req_id, "ENOENT", "no regular file at path", path)
             return
-        emit({"id": req_id, "t": "progress", "files": index, "filesTotal": len(paths),
-              "current": os.path.basename(path)})
-        # The CLI copies its result to the clipboard, which forks a persistent
-        # wl-copy daemon. Running it directly would leave the daemon holding
-        # this helper's stdout/stderr pipes open, so run it through bash with
-        # its stdio redirected to a temp file; the daemon inherits the file
-        # descriptors, not the pipes.
-        errfd, errfile = tempfile.mkstemp(prefix=".omafile-transcode-")
-        os.close(errfd)
-        try:
-            # Engine: an empty value lets the CLI apply its own defaults
-            # (it auto-detects the hardware path where it applies);
-            # gpu/cpu force the engine. Passing it positionally keeps the
-            # run headless, so the CLI never opens its interactive engine
-            # menu (which needs the shell's OMARCHY_PATH).
-            proc = run_trusted("bash", ["-c",
-                "exec omarchy-transcode \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" >\"$6\" 2>&1",
-                "omafile-transcode", path, fmt, qual, res, engine, errfile], timeout=600)
-            message = ""
-            try:
-                with open(errfile, "r", encoding="utf-8", errors="replace") as fh:
-                    message = fh.read().strip()
-            except OSError:
-                pass
-        finally:
-            try:
-                os.unlink(errfile)
-            except OSError:
-                pass
-        if cancel_event is not None and cancel_event.is_set():
-            send_error(req_id, "ECANCELED", "cancelled")
+    programs = []
+    for name in ("omarchy-launch-floating-terminal-with-presentation", "omarchy-transcode"):
+        program = shutil.which(name)
+        if not program:
+            send_error(req_id, "EUNSUPPORTED", name + " is not installed or not on PATH")
             return
-        if proc.returncode != 0:
-            send_error(req_id, "ETRANSCODE", message or "transcode failed", path)
-            return
-        stem = os.path.splitext(os.path.basename(path))[0]
-        # Mirror the CLI: stamp only what was forced (resolution and/or quality).
-        parts = [stem]
-        if res:
-            parts.append(res)
-        if qual:
-            parts.append(qual)
-        outputs.append(os.path.join(os.path.dirname(path), "-".join(parts) + "." + fmt))
-    send_done(req_id, outputs=outputs)
+        programs.append(os.path.abspath(program))
+    wrapper, binary = programs
+    if len(paths) == 1:
+        command = shlex.join([binary, paths[0]])
+    else:
+        command = "; ".join(
+            shlex.join(["printf", "%s\n", "Transcoding " + path]) + " && "
+            + shlex.join([binary, path]) + " || true"
+            for path in paths
+        )
+    try:
+        proc = subprocess.Popen(
+            [wrapper, command], stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            close_fds=True, start_new_session=True)
+    except OSError as e:
+        send_error(req_id, errno_code(e), str(e) or "could not open transcode")
+        return
+    reap_detached()
+    _DETACHED.append(proc)
+    send_done(req_id, launched=len(paths))
 
 LNKR_VARIANTS = ("v1", "v2", "v3", "v4")
 LNKR_MODES = ("rich", "safe", "make")
@@ -4565,31 +4522,6 @@ def lnkr_binary_candidates():
         candidates.append(os.path.join(root, "rust/target/release/linkodec"))
     return candidates
 
-
-def op_imagedims(req):
-    req_id = req["id"]
-    path = req.get("path")
-    if not isinstance(path, str) or not path.startswith("/"):
-        send_error(req_id, "EINVAL", "absolute path required")
-        return
-    try:
-        trusted_program("ffprobe")
-    except FileNotFoundError:
-        send_error(req_id, "EUNSUPPORTED", "ffprobe is not installed")
-        return
-    data = run_tool(["ffprobe", "-v", "error", "-select_streams", "v:0",
-                     "-show_entries", "stream=width,height", "-of", "json", path])
-    try:
-        stream = data["streams"][0]
-        width = int(stream.get("width") or 0)
-        height = int(stream.get("height") or 0)
-    except (KeyError, IndexError, TypeError, ValueError):
-        send_error(req_id, "ENODATA", "no image dimensions found", path)
-        return
-    if width <= 0 or height <= 0:
-        send_error(req_id, "ENODATA", "no image dimensions found", path)
-        return
-    send_done(req_id, width=width, height=height)
 
 def op_lnkrresolve(req):
     req_id = req["id"]
@@ -4689,7 +4621,6 @@ CANCELLABLE_OPS = {
     "counts": op_counts,
     "extract": op_extract,
     "compress": op_compress,
-    "transcode": op_transcode,
 }
 
 SIMPLE_OPS = {
@@ -4700,7 +4631,7 @@ SIMPLE_OPS = {
     "clipclear": op_clipclear,
     "stat": op_stat,
     "peek": op_peek,
-    "imagedims": op_imagedims,
+    "transcode": op_transcode,
     "thumbtypes": op_thumbtypes,
     "bookmarks": op_bookmarks,
     "setbookmarks": op_setbookmarks,

@@ -511,6 +511,21 @@ on, without replacing anything. Emits `progress` like `extract`, where `bytes` a
 Errors: `EINVAL`, `ENOENT`, `EUNSUPPORTED` without bsdtar, `ECANCELED`, and `EFAIL` with the
 tool's message. The temporary file is removed on failure.
 
+### transcode
+
+```
+{"id": N, "op": "transcode", "paths": ["/home/me/photo.avif", "/home/me/video.mp4"]}
+```
+
+Opens the installed `omarchy-transcode` through
+`omarchy-launch-floating-terminal-with-presentation`, resolved on the session `PATH`.
+Paths must be absolute regular files and are deduplicated in selection order.
+Each invocation receives only its input path, shell quoted, so the bin owns its menus,
+encoding and output names. A batch runs sequentially in one terminal and continues
+after a failed file. Replies `done` with `launched`, the number of files handed off,
+not completed conversions. The terminal owns progress and cancellation.
+Errors: `EINVAL`, `ENOENT`, `EUNSUPPORTED` naming a missing command, or a launch error.
+
 ### dirs
 
 ```
@@ -547,8 +562,10 @@ Writes to stdout are serialized behind a single lock so lines never interleave.
 ## Safety
 
 The helper runs with the invoking user's permissions and never escalates. It contains
-no `sudo`, no `pkexec`, no shell invocation, no network access and no third-party
-imports. Every subprocess it does spawn is a fixed argv list of a trusted system tool, such as util-linux, udisksctl or bsdtar.
+no `sudo`, no `pkexec`, no network access and no third-party
+imports. System operations use fixed argv lists of trusted tools. The explicit
+Transcode action instead launches the session's Omarchy terminal wrapper with a
+shell-quoted command and the inherited session environment, like Nautilus.
 
 ### clipimage
 

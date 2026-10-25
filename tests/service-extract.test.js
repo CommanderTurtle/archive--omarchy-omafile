@@ -12,7 +12,7 @@ function service() {
   const requests = [];
   const c = vm.createContext({ transfers: [], Model: loadModule('Model.js'), Date });
   c.root = c;
-  for (const name of ['extractArchive', 'compressPaths', 'updateTransfer', 'transferActive', 'cancelTransfer']) {
+  for (const name of ['extractArchive', 'compressPaths', 'transcodePaths', 'updateTransfer', 'transferActive', 'cancelTransfer']) {
     const match = source.match(new RegExp('^  function ' + name + '\\([^]*?^  }', 'm'));
     vm.runInContext(match[0], c);
   }
@@ -69,4 +69,18 @@ test('compressing is a transfer named after the archive', () => {
   requests[0].handlers.onDone({ id, path: '/home/me/Archive.zip' });
   assert.equal(c.transfers[0].state, 'done');
   assert.equal(result, '/home/me/Archive.zip');
+});
+
+test('transcode hands off paths without encoding options or a synthetic transfer', () => {
+  const { c, requests } = service();
+  let launched = 0;
+  let error = null;
+  const paths = ['/home/me/photo.avif', '/home/me/video.webm'];
+  c.transcodePaths(paths, (m) => { launched = m.launched; }, (m) => { error = m.code; });
+  assert.deepEqual(JSON.parse(JSON.stringify(requests[0].payload)), { op: 'transcode', paths });
+  assert.equal(c.transfers.length, 0);
+  requests[0].handlers.onDone({ launched: 2 });
+  assert.equal(launched, 2);
+  requests[0].handlers.onError({ code: 'EUNSUPPORTED', message: 'omarchy-transcode is not installed or not on PATH' });
+  assert.equal(error, 'EUNSUPPORTED');
 });

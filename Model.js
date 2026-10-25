@@ -1018,11 +1018,6 @@ function isTranscodable(entry) {
   return !!transcodePictureExts[ext] || !!transcodeVideoExts[ext];
 }
 
-function transcodeMediaType(entry) {
-  var ext = String((entry && entry.ext) || '').toLowerCase();
-  return transcodeVideoExts[ext] ? 'video' : 'picture';
-}
-
 function outputVolume(sliderValue) {
   var v = Number(sliderValue) || 0;
   if (v <= 0) return 0;

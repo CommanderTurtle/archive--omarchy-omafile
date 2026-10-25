@@ -712,12 +712,6 @@ Item {
       if (place && place.path) service.renameBookmark(place.path, value)
       return
     }
-    if (dialogMode === "transcode") {
-      var payload = dialogPayload
-      closeDialog()
-      if (payload && payload.targets) transcodeNow(payload.targets)
-      return
-    }
     if (!value) {
       dialogError = "Name cannot be empty"
       return
@@ -1048,15 +1042,6 @@ Item {
   }
 
   property string compressFormat: ".zip"
-  property string transcodeFormat: ""
-  property string transcodeResolution: ""
-  property string transcodeTier: "high"
-  property string transcodeEngine: "gpu"
-  property bool transcodeIsVideo: false
-  property string transcodeAxis: ""
-  property var transcodeFormats: []
-  property var transcodeResolutions: []
-  readonly property var transcodeRungs: [7168, 6656, 6144, 5632, 5120, 4608, 4096, 3840, 3584, 3072, 2560, 2160, 2048, 1920, 1440, 1280, 1080, 1024, 960, 854, 720, 640, 540, 512, 480, 360, 256, 128]
 
   function compressTargets(entry) {
     var p = activePane()
@@ -1116,134 +1101,19 @@ Item {
     return out
   }
 
-  function transcodeResolutionLadder(width, height) {
-    var long = Math.max(Number(width) || 0, Number(height) || 0)
-    if (long <= 0) return []
-    var out = [{ label: String(long) + "x", value: String(long) }]
-    for (var i = 0; i < transcodeRungs.length; i++) {
-      var rung = transcodeRungs[i]
-      if (rung < long) out.push({ label: String(rung) + "x", value: String(rung) })
-    }
-    return out
-  }
-
-  function transcodeVideoResolutionLadder(height) {
-    var h = Number(height) || 0
-    if (h <= 0) return []
-    var out = [{ label: String(h) + "p", value: String(h) }]
-    for (var i = 0; i < transcodeRungs.length; i++) {
-      var rung = transcodeRungs[i]
-      if (rung < h) out.push({ label: String(rung) + "p", value: String(rung) })
-    }
-    return out
-  }
-
-  function askTranscode(entry) {
+  function launchTranscode(entry) {
     if (!pickAllows("transcode")) return
     var targets = transcodeTargets(entry)
     if (targets.length === 0) return
-    var title = "Transcode " + (targets.length === 1 ? targets[0].name : Model.formatCount(targets.length, "item", "items"))
-    transcodeEngine = "gpu"
-    function openDialog() {
-      showDialog("transcode", title, "", { targets: targets })
-    }
-    if (Model.transcodeMediaType(targets[0]) === "video") {
-      transcodeIsVideo = true
-      transcodeAxis = ""
-      transcodeFormats = [
-        { label: "MP4, plays anywhere", value: "mp4" },
-        { label: "GIF, for chat and docs", value: "gif" },
-        { label: "WebM, modern", value: "webm" },
-        { label: "AVIF, smallest", value: "avif" }
-      ]
-      transcodeFormat = "mp4"
-      service.imageSize(targets[0].path, function (m) {
-        var ladder = transcodeVideoResolutionLadder(m.height)
-        if (ladder.length === 0) {
-          transcodeResolutions = [{ label: "2160p", value: "2160" }, { label: "1080p", value: "1080" }, { label: "720p", value: "720" }]
-          transcodeResolution = "1080"
-        } else {
-          transcodeResolutions = ladder
-          transcodeResolution = ladder[0].value
-        }
-        openDialog()
-      }, function () {
-        transcodeResolutions = [{ label: "2160p", value: "2160" }, { label: "1080p", value: "1080" }, { label: "720p", value: "720" }]
-        transcodeResolution = "1080"
-        openDialog()
-      })
-      return
-    }
-    transcodeIsVideo = false
-    transcodeFormats = [
-      { label: "JPG", value: "jpg" },
-      { label: "PNG, lossless", value: "png" },
-      { label: "WebP, modern", value: "webp" },
-      { label: "AVIF, smallest", value: "avif" }
-    ]
-    transcodeFormat = "jpg"
-    transcodeTier = "high"
-    transcodeAxis = ""
-    service.imageSize(targets[0].path, function (m) {
-      var ladder = transcodeResolutionLadder(m.width, m.height)
-      if (ladder.length === 0) {
-        ladder = [{ label: "3160x", value: "3160" }, { label: "2160x", value: "2160" }, { label: "1080x", value: "1080" }]
-        transcodeResolution = "2160"
-      } else {
-        transcodeResolution = ladder[0].value
-      }
-      transcodeResolutions = ladder
-      openDialog()
-    }, function () {
-      transcodeResolutions = [{ label: "3160x", value: "3160" }, { label: "2160x", value: "2160" }, { label: "1080x", value: "1080" }]
-      transcodeResolution = "2160"
-      openDialog()
-    })
-  }
-
-  function transcodeNow(targets) {
-    var p = activePane()
     var paths = []
     for (var i = 0; i < targets.length; i++) paths.push(targets[i].path)
-    statusText = "Transcoding " + Model.formatCount(targets.length, "item", "items")
-    var engine = (transcodeFormat === "avif" || transcodeFormat === "webm") ? transcodeEngine : ""
-    if (transcodeIsVideo)
-      service.transcodePaths(paths, transcodeFormat, transcodeResolution, engine, function (m) {
-        var outputs = m.outputs || []
-        root.statusText = "Transcoded " + Model.formatCount(outputs.length, "file", "files")
-        p.refresh()
-        if (outputs.length === 1) {
-          selectTimer.pendingName = Model.basename(String(outputs[0]))
-          selectTimer.pendingPane = p
-          selectTimer.restart()
-        }
-      }, function (m) {
-        root.statusText = m && m.code === "ECANCELED" ? "Transcoding cancelled"
-          : "Could not transcode: " + String((m && m.message) || "")
-      })
-    else {
-      // Send only the walked axis; the CLI applies its defaults to the
-      // other one (input format / native size) and names the output after
-      // what was actually forced.
-      var f = transcodeFormat
-      var q = transcodeTier
-      var r = transcodeResolution
-      if (transcodeAxis === "codec") r = ""
-      else if (transcodeAxis === "resolution") { f = ""; q = "" }
-      service.transcodeQualityPaths(paths, f, q, r, function (m) {
-        var outputs = m.outputs || []
-        root.statusText = "Transcoded " + Model.formatCount(outputs.length, "file", "files")
-        p.refresh()
-        if (outputs.length === 1) {
-          selectTimer.pendingName = Model.basename(String(outputs[0]))
-          selectTimer.pendingPane = p
-          selectTimer.restart()
-        }
-      }, function (m) {
-        root.statusText = m && m.code === "ECANCELED" ? "Transcoding cancelled"
-          : "Could not transcode: " + String((m && m.message) || "")
-      })
-    }
+    statusText = "Opening transcode"
+    service.transcodePaths(paths, function (m) {
+      root.statusText = "Opened transcode for " + Model.formatCount(Number(m.launched) || 0, "item", "items")
+      root.afterLaunch()
+    }, function (m) {
+      root.statusText = "Could not open transcode: " + String((m && m.message) || "")
+    })
   }
 
   function afterLaunch() {
@@ -1624,7 +1494,7 @@ Item {
     else if (key === "emptytrash") askEmptyTrash()
     else if (key === "copypath") service.copyToClipboardText(entry ? entry.path : p.path)
     else if (key === "extract") extractArchives(archiveTargets(entry))
-    else if (key === "transcode") askTranscode(entry)
+    else if (key === "transcode") launchTranscode(entry)
     else if (key === "compress") askCompress(entry)
     else if (key === "properties") showProperties(entry)
     else if (key === "newfolder") showDialog("newfolder", "New folder", "untitled folder", null)
@@ -2272,9 +2142,6 @@ Item {
       if (event.key === Qt.Key_Down) { moveAppCursor(1); return true }
       if (event.key === Qt.Key_Up) { moveAppCursor(-1); return true }
       if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { chooseApp(); return true }
-    }
-    if (dialogMode === "transcode") {
-      if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { submitDialog(); return true }
     }
     if (dialogMode === "settings" || dialogMode === "shortcuts" || dialogMode === "properties") {
       if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { closeDialog(); return true }
@@ -3589,72 +3456,6 @@ Item {
             onChanged: function (v) { root.compressFormat = v }
           }
 
-          Button {
-            objectName: "transcodeCodecButton"
-            width: parent.width
-            visible: root.dialogMode === "transcode"
-            text: "Codec"
-            bordered: true
-            onClicked: root.transcodeAxis = (root.transcodeAxis === "codec") ? "" : "codec"
-          }
-
-          Button {
-            objectName: "transcodeResolutionButton"
-            width: parent.width
-            visible: root.dialogMode === "transcode"
-            text: "Resolution"
-            bordered: true
-            onClicked: root.transcodeAxis = (root.transcodeAxis === "resolution") ? "" : "resolution"
-          }
-
-          Dropdown {
-            objectName: "transcodeFormat"
-            width: parent.width
-            visible: root.dialogMode === "transcode" && root.transcodeAxis === "codec"
-            label: "Codec"
-            value: root.transcodeFormat
-            options: root.transcodeFormats
-            onChanged: function (v) { root.transcodeFormat = v }
-          }
-
-          Dropdown {
-            objectName: "transcodeQuality"
-            width: parent.width
-            visible: root.dialogMode === "transcode" && !root.transcodeIsVideo && root.transcodeAxis === "codec"
-            label: "Quality"
-            value: root.transcodeTier
-            options: [
-              { label: "High", value: "high" },
-              { label: "Medium", value: "medium" },
-              { label: "Low", value: "low" }
-            ]
-            onChanged: function (v) { root.transcodeTier = v }
-          }
-
-          Dropdown {
-            objectName: "transcodeEngine"
-            width: parent.width
-            visible: root.dialogMode === "transcode" && root.transcodeIsVideo
-              && (root.transcodeFormat === "avif" || root.transcodeFormat === "webm")
-            label: "Engine"
-            value: root.transcodeEngine
-            options: [
-              { label: "GPU, hardware encoder", value: "gpu" },
-              { label: "CPU, software encoder", value: "cpu" }
-            ]
-            onChanged: function (v) { root.transcodeEngine = v }
-          }
-
-          Dropdown {
-            objectName: "transcodeResolution"
-            width: parent.width
-            visible: root.dialogMode === "transcode" && root.transcodeAxis === "resolution"
-            label: "Resolution"
-            value: root.transcodeResolution
-            options: root.transcodeResolutions
-            onChanged: function (v) { root.transcodeResolution = v }
-          }
-
           Text {
             textFormat: Text.PlainText
             width: parent.width
@@ -4539,8 +4340,7 @@ Item {
                 : (root.dialogMode === "connect" ? "Connect"
                   : (root.dialogMode === "unlock" ? "Unlock"
                     : (root.dialogMode === "openwith" ? "Open"
-                      : (root.dialogMode === "compress" ? "Compress"
-                        : (root.dialogMode === "transcode" ? "Transcode" : "Confirm")))))
+                      : (root.dialogMode === "compress" ? "Compress" : "Confirm"))))
               bordered: true
               onClicked: {
                 if (root.isReadOnlyDialog()) root.closeDialog()

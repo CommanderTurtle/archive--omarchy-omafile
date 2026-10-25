@@ -6,6 +6,14 @@ var loadModule = require('./load.js');
 
 var Model = loadModule('Model.js');
 
+test('transcode offers supported images and videos without classifying an encoding route', function () {
+  for (var ext of ['jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'avif', 'mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', 'AVIF'])
+    assert.equal(Model.isTranscodable({ ext: ext, isDir: false }), true);
+  assert.equal(Model.isTranscodable({ ext: 'avif', isDir: true }), false);
+  assert.equal(Model.isTranscodable({ ext: 'txt', isDir: false }), false);
+  assert.equal(Model.isTranscodable(null), false);
+});
+
 function arrayLike(items) {
   var obj = {};
   for (var i = 0; i < items.length; i++) obj[i] = items[i];

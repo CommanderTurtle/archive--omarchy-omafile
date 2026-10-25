@@ -1051,6 +1051,7 @@ Item {
   property string transcodeFormat: ""
   property string transcodeResolution: ""
   property string transcodeTier: "high"
+  property string transcodeEngine: "gpu"
   property bool transcodeIsVideo: false
   property string transcodeAxis: ""
   property var transcodeFormats: []
@@ -1142,13 +1143,19 @@ Item {
     var targets = transcodeTargets(entry)
     if (targets.length === 0) return
     var title = "Transcode " + (targets.length === 1 ? targets[0].name : Model.formatCount(targets.length, "item", "items"))
+    transcodeEngine = "gpu"
     function openDialog() {
       showDialog("transcode", title, "", { targets: targets })
     }
     if (Model.transcodeMediaType(targets[0]) === "video") {
       transcodeIsVideo = true
       transcodeAxis = ""
-      transcodeFormats = [{ label: "MP4, plays anywhere", value: "mp4" }, { label: "GIF, for chat and docs", value: "gif" }]
+      transcodeFormats = [
+        { label: "MP4, plays anywhere", value: "mp4" },
+        { label: "GIF, for chat and docs", value: "gif" },
+        { label: "WebM, modern", value: "webm" },
+        { label: "AVIF, smallest", value: "avif" }
+      ]
       transcodeFormat = "mp4"
       service.imageSize(targets[0].path, function (m) {
         var ladder = transcodeVideoResolutionLadder(m.height)
@@ -1199,8 +1206,9 @@ Item {
     var paths = []
     for (var i = 0; i < targets.length; i++) paths.push(targets[i].path)
     statusText = "Transcoding " + Model.formatCount(targets.length, "item", "items")
+    var engine = (transcodeFormat === "avif" || transcodeFormat === "webm") ? transcodeEngine : ""
     if (transcodeIsVideo)
-      service.transcodePaths(paths, transcodeFormat, transcodeResolution, function (m) {
+      service.transcodePaths(paths, transcodeFormat, transcodeResolution, engine, function (m) {
         var outputs = m.outputs || []
         root.statusText = "Transcoded " + Model.formatCount(outputs.length, "file", "files")
         p.refresh()
@@ -3621,6 +3629,20 @@ Item {
               { label: "Low", value: "low" }
             ]
             onChanged: function (v) { root.transcodeTier = v }
+          }
+
+          Dropdown {
+            objectName: "transcodeEngine"
+            width: parent.width
+            visible: root.dialogMode === "transcode" && root.transcodeIsVideo
+              && (root.transcodeFormat === "avif" || root.transcodeFormat === "webm")
+            label: "Engine"
+            value: root.transcodeEngine
+            options: [
+              { label: "GPU, hardware encoder", value: "gpu" },
+              { label: "CPU, software encoder", value: "cpu" }
+            ]
+            onChanged: function (v) { root.transcodeEngine = v }
           }
 
           Dropdown {

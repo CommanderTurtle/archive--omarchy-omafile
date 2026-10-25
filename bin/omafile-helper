@@ -4456,7 +4456,7 @@ def op_compress(req, cancel_event):
             except OSError:
                 pass
         os.close(pfd)
-TRANSCODE_FORMATS = ("jpg", "png", "webp", "avif", "mp4", "gif")
+TRANSCODE_FORMATS = ("jpg", "png", "webp", "avif", "mp4", "gif", "webm")
 TRANSCODE_QUALITIES = ("high", "medium", "low")
 TRANSCODE_RESOLUTIONS = ("high", "medium", "low", "4k", "1080p", "720p")
 
@@ -4467,6 +4467,7 @@ def op_transcode(req, cancel_event):
     fmt = req.get("format") or ""
     qual = req.get("quality") or ""
     res = req.get("resolution") or ""
+    engine = req.get("engine") or ""
     res_ok = isinstance(res, str) and (
         res in TRANSCODE_RESOLUTIONS or (res.isdigit() and int(res) > 0))
     if (not isinstance(paths, list) or not paths
@@ -4474,6 +4475,7 @@ def op_transcode(req, cancel_event):
             or (fmt != "" and fmt not in TRANSCODE_FORMATS)
             or (qual != "" and qual not in TRANSCODE_QUALITIES)
             or (res != "" and not res_ok)
+            or (engine not in ("", "gpu", "cpu"))
             or (fmt == "" and res == "")):
         send_error(req_id, "EINVAL",
                    "absolute paths and a forced axis are required: a codec "
@@ -4504,13 +4506,14 @@ def op_transcode(req, cancel_event):
         errfd, errfile = tempfile.mkstemp(prefix=".omafile-transcode-")
         os.close(errfd)
         try:
-            # Force the engine: this runs headless, so the CLI must not open
-            # its interactive engine menu (which needs the shell's
-            # OMARCHY_PATH). "gpu" probes for a hardware AV1 encoder and
-            # falls back to the cpu path when none is usable.
+            # Engine: an empty value lets the CLI apply its own defaults
+            # (it auto-detects the hardware path where it applies);
+            # gpu/cpu force the engine. Passing it positionally keeps the
+            # run headless, so the CLI never opens its interactive engine
+            # menu (which needs the shell's OMARCHY_PATH).
             proc = run_trusted("bash", ["-c",
                 "exec omarchy-transcode \"$1\" \"$2\" \"$3\" \"$4\" \"$5\" >\"$6\" 2>&1",
-                "omafile-transcode", path, fmt, qual, res, "gpu", errfile], timeout=600)
+                "omafile-transcode", path, fmt, qual, res, engine, errfile], timeout=600)
             message = ""
             try:
                 with open(errfile, "r", encoding="utf-8", errors="replace") as fh:

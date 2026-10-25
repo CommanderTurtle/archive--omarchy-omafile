@@ -1183,14 +1183,14 @@ Item {
     return id
   }
 
-  function transcodePaths(paths, format, resolution, onDone, onError) {
+  function transcodePaths(paths, format, resolution, engine, onDone, onError) {
     var folder = Model.dirname(paths[0])
     var record = {
       id: 0, op: "transcode", label: resolution + " " + format, dest: folder, state: "running",
       bytes: 0, total: 0, files: 0, filesTotal: paths.length, current: "", rate: 0,
       errors: [], startedMs: Date.now(), finishedMs: 0, count: paths.length, from: folder
     }
-    var id = request({ op: "transcode", paths: paths, format: format, resolution: resolution }, {
+    var id = request({ op: "transcode", paths: paths, format: format, resolution: resolution, engine: engine }, {
       onData: function (m) {
         if (m.t === "progress") updateTransfer(m.id, {
           files: Number(m.files) || 0, current: String(m.current || "")

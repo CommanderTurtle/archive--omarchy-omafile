@@ -571,9 +571,6 @@ Item {
   }
 
   function statRemoteEntries() {
-    // GVFS listings arrive without per-entry attributes, so the folder opens
-    // instantly; stat the entries in chunks after the fact so sizes and dates
-    // fill in while the pane is already usable.
     if (!service || typeof service.isGvfsPath !== "function") return
     if (!service.isGvfsPath(pane.path)) return
     var generation = pane._generation

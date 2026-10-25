@@ -97,6 +97,8 @@ QtObject {
   }
   function noteRecent() {}
   function trashFilesPath() { return "/tmp/.trash" }
+  property string gvfsRoot: ""
+  function isGvfsPath(p) { return gvfsRoot !== "" && String(p).indexOf(gvfsRoot + "/") === 0 }
   function driveHidden() { return false }
   function networkMounts() { return drives.filter(function (d) { return d.network === true }) }
   property var statItems: ({})

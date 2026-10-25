@@ -159,10 +159,6 @@ def op_list(req, cancel_event):
                 if not hidden and name_str.startswith("."):
                     continue
                 if remote:
-                    # GVFS mounts carry the type in the directory entry; a
-                    # per-entry stat would cost a round trip per file on a
-                    # network share, so size and mtime stay 0 until the shell
-                    # stats the item on demand.
                     try:
                         if entry.is_symlink():
                             kind, size, mode = "l", 0, stat.S_IFLNK
@@ -305,8 +301,6 @@ def inotify_loop(handle):
 
 def poll_loop(handle):
     last_snapshot = None
-    # On GVFS mounts inotify is unavailable and a per-entry stat would cost a
-    # round trip per file every 2 seconds, so the snapshot is names only.
     names_only = is_gvfs_path(handle.path_bytes)
     while not handle.stop_event.wait(2.0):
         snap = None

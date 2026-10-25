@@ -671,6 +671,50 @@ class PollWatchTests(HelperTestCase):
         self.assertEqual(changed["names"], ["grow.bin", "new.txt"])
         self.helper.send({"id": self.next_id(), "op": "unwatch", "path": self.root})
 
+class GvfsTests(HelperTestCase):
+    def setUp(self):
+        super().setUp()
+        self.helper.close()
+        self.share = self.path("gvfs", "smb-share:server=nas,share=media")
+        os.makedirs(os.path.join(self.share, "sub"))
+        with open(os.path.join(self.share, "a.txt"), "w") as f:
+            f.write("hello")
+        os.symlink("a.txt", os.path.join(self.share, "link"))
+        self.helper = Helper(env={"XDG_RUNTIME_DIR": self.root}, overrides={"force_poll": True})
+
+    def test_gvfs_listing_skips_the_per_entry_stat(self):
+        msgs = self.helper.call({"id": self.next_id(), "op": "list", "path": self.share, "hidden": False})
+        entries = {e[0]: e for m in msgs if m["t"] == "entries" for e in m["c"]}
+        self.assertEqual(entries["a.txt"][1:4], ["f", 0, 0])
+        self.assertEqual(entries["sub"][1:4], ["d", 0, 0])
+        self.assertEqual(entries["link"][1], "l")
+        self.assertEqual(self.terminal(msgs)["total"], 3)
+        local = self.helper.call({"id": self.next_id(), "op": "list", "path": self.root, "hidden": False})
+        gvfs = [e for m in local if m["t"] == "entries" for e in m["c"] if e[0] == "gvfs"][0]
+        self.assertNotEqual(gvfs[3], 0)
+
+    def test_gvfs_poll_compares_names_only(self):
+        req = self.next_id()
+        self.helper.send({"id": req, "op": "watch", "path": self.share})
+        time.sleep(2.3)
+        with open(os.path.join(self.share, "a.txt"), "a") as f:
+            f.write("edited in place")
+        time.sleep(2.5)
+        with open(os.path.join(self.share, "new.txt"), "w") as f:
+            f.write("n")
+        deadline = time.time() + 6
+        changed = None
+        while time.time() < deadline and changed is None:
+            try:
+                obj = self.helper.q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if obj.get("id") == req and obj.get("t") == "changed":
+                changed = obj
+        self.assertIsNotNone(changed)
+        self.assertEqual(changed["names"], ["new.txt"])
+        self.helper.send({"id": self.next_id(), "op": "unwatch", "path": self.share})
+
 class BookmarkTests(HelperTestCase):
     def setUp(self):
         super().setUp()

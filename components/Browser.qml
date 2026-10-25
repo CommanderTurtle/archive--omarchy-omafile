@@ -1471,7 +1471,7 @@ Item {
       if (trashed)
         items.push({ key: "delete", label: "Delete permanently", glyph: Icons.actionGlyph("delete"), hint: "Delete" })
       else if (shiftHeld || allGvfs([entry.path]))
-        items.push({ key: "delete", label: "Delete permanently", glyph: Icons.actionGlyph("delete"), hint: "Delete" })
+        items.push({ key: "delete", label: "Delete permanently", glyph: Icons.actionGlyph("delete"), hint: shiftHeld ? "Shift+Delete" : "Delete" })
       else
         items.push({ key: "trash", label: "Move to trash", glyph: Icons.actionGlyph("trash"), hint: "Delete" })
       items.push({ key: "properties", label: "Properties", glyph: Icons.actionGlyph("properties"), hint: "Ctrl+I" })

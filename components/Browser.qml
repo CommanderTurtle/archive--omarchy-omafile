@@ -1127,6 +1127,21 @@ Item {
     for (var i = 0; i < list.length; i++) if (String(list[i]) === String(path)) return true
     return false
   }
+  function revealSymlink(entry) {
+    if (!entry || !entry.linkTarget) return
+    var p = activePane()
+    var target = String(entry.linkTarget)
+    if (target.charAt(0) !== "/") target = Model.normalizePath(Model.joinPath(p.path, target))
+    if (entry.isDir) {
+      p.navigate(target, true)
+      return
+    }
+    p.navigate(Model.dirname(target), true)
+    selectTimer.pendingName = Model.basename(target)
+    selectTimer.pendingPane = p
+    selectTimer.restart()
+  }
+
   function contextActions(entry) {
     var p = activePane()
     var hasEntry = entry !== null && entry !== undefined
@@ -1151,6 +1166,8 @@ Item {
       items.push({ key: "copy", label: "Copy", glyph: Icons.actionGlyph("copy"), hint: "Ctrl+C" })
       items.push({ key: "paste", label: "Paste", glyph: Icons.actionGlyph("paste"), hint: "Ctrl+V", disabled: !service })
       items.push({ key: "copypath", label: "Copy path", glyph: Icons.actionGlyph("copy") })
+      if (entry.isLink && !entry.isBroken && entry.linkTarget)
+        items.push({ key: "reveallink", label: "Go to Symlink Location", glyph: Icons.actionGlyph("open") })
       separator()
       var trashed = Model.allInTrash([entry.path], trashRoot())
       if (trashed && Model.trashItemNames([entry.path], trashRoot()).length > 0)
@@ -1495,6 +1512,7 @@ Item {
     else if (key === "restore") doRestore()
     else if (key === "emptytrash") askEmptyTrash()
     else if (key === "copypath") service.copyToClipboardText(entry ? entry.path : p.path)
+    else if (key === "reveallink") revealSymlink(entry)
     else if (key === "extract") extractArchives(archiveTargets(entry))
     else if (key === "transcode") launchTranscode(entry)
     else if (key === "compress") askCompress(entry)

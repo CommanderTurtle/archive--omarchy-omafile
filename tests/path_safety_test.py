@@ -113,6 +113,75 @@ class PathSafetyTests(unittest.TestCase):
         self.assertEqual(cap.errors, [])
         self.assertTrue((private / "kept.txt").exists())
 
+    def private_picture_behind_a_shared_leaf(self):
+        private = self.root / "private"
+        private.mkdir()
+        photo = private / "secret.png"
+        photo.write_bytes(self.helper.PNG_MAGIC + b"\0" * 64)
+        share = self.root / "share"
+        share.mkdir()
+        os.symlink(photo, share / "holiday.png")
+        return share
+
+    def transcode(self, path):
+        programs = {"magick": "/usr/bin/magick", "ffmpeg": None, "cjxl": None}
+        ran = []
+
+        def encode(argv, fds, *rest, **kw):
+            ran.append(argv)
+            os.write(fds[1], b"converted")
+            return 0, None
+
+        with patch.object(self.helper, "run_media", side_effect=encode):
+            try:
+                self.helper.transcode_one(str(path), "jpg", "original", programs, threading.Event())
+            except OSError as e:
+                return e.errno, ran
+        return None, ran
+
+    def test_transcode_will_not_read_through_a_link_swapped_into_a_network_share(self):
+        share = self.private_picture_behind_a_shared_leaf()
+        with self.untrusted_links():
+            code, ran = self.transcode(share / "holiday.png")
+        self.assertEqual(code, errno.ELOOP)
+        self.assertEqual(ran, [], "the encoder never sees the private picture")
+        self.assertEqual(sorted(p.name for p in share.iterdir()), ["holiday.png"])
+
+    def test_transcode_will_not_read_through_a_link_someone_else_owns(self):
+        share = self.private_picture_behind_a_shared_leaf()
+        with patch.object(self.helper, "link_trusted", return_value=False):
+            code, ran = self.transcode(share / "holiday.png")
+        self.assertEqual(code, errno.ELOOP)
+        self.assertEqual(ran, [])
+        self.assertEqual(sorted(p.name for p in share.iterdir()), ["holiday.png"])
+
+    def test_transcode_never_follows_the_leaf_once_resolved(self):
+        share = self.private_picture_behind_a_shared_leaf()
+        real = share / "real.png"
+        real.write_bytes(self.helper.PNG_MAGIC + b"\0" * 64)
+        swapped = []
+        original = self.helper.resolve_trusted_leaf
+
+        def swap_after_resolving(path_bytes):
+            resolved = original(path_bytes)
+            os.unlink(real)
+            os.symlink(self.root / "private" / "secret.png", real)
+            swapped.append(resolved)
+            return resolved
+
+        with patch.object(self.helper, "resolve_trusted_leaf", side_effect=swap_after_resolving):
+            code, ran = self.transcode(real)
+        self.assertEqual(len(swapped), 1)
+        self.assertEqual(code, errno.ELOOP)
+        self.assertEqual(ran, [])
+
+    def test_transcode_through_a_trusted_local_link_still_works(self):
+        share = self.private_picture_behind_a_shared_leaf()
+        code, ran = self.transcode(share / "holiday.png")
+        self.assertIsNone(code)
+        self.assertEqual(len(ran), 1)
+        self.assertEqual((share / "holiday-original.jpg").read_bytes(), b"converted")
+
     def test_recursive_chmod_stays_inside_the_tree(self):
         outside = self.root / "outside"
         outside.mkdir()

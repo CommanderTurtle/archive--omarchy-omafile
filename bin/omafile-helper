@@ -4556,12 +4556,17 @@ def transcode_argv(kind, coder, fmt, resolution, in_fd, out_fd, programs):
 
 
 def transcode_one(path, fmt, resolution, programs, cancel_event):
+    real = resolve_trusted_leaf(to_bytes(path))
     pfd, leaf = open_parent_safely(to_bytes(path))
     in_fd = None
     out_fd = None
     work = None
     try:
-        in_fd = os.open(leaf, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=pfd)
+        src_fd, src_leaf = open_parent_safely(real)
+        try:
+            in_fd = os.open(src_leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=src_fd)
+        finally:
+            os.close(src_fd)
         if not stat.S_ISREG(os.fstat(in_fd).st_mode):
             raise ValueError("not a regular file")
         os.set_blocking(in_fd, True)
@@ -4726,7 +4731,7 @@ def resolve_trusted_leaf(path_bytes):
             if mounts is None:
                 mounts = mount_entries()
             if not link_trusted(lst, pfd, mounts):
-                raise OSError(errno.ELOOP, "this is a link Omafile will not edit through", to_str(current))
+                raise OSError(errno.ELOOP, "this is a link Omafile will not follow", to_str(current))
             target = os.readlink(leaf, dir_fd=pfd)
         finally:
             os.close(pfd)

@@ -26,6 +26,8 @@ import zlib
 
 VERSION = "1.0.0"
 HOME = os.path.expanduser("~")
+PROGRESS_INTERVAL = 0.5
+WATCH_NAME_LIMIT = 200
 
 STDOUT_LOCK = threading.Lock()
 
@@ -254,6 +256,7 @@ class WatchHandle:
 
 def inotify_loop(handle):
     pending = set()
+    dirty = False
     first_pending_time = None
     fd = handle.fd
     while not handle.stop_event.is_set():
@@ -269,7 +272,6 @@ def inotify_loop(handle):
             except OSError:
                 break
             offset = 0
-            overflow = False
             while offset + EVENT_SIZE <= len(data):
                 wd, mask, cookie, length = struct.unpack_from(EVENT_FMT, data, offset)
                 name = b""
@@ -277,21 +279,22 @@ def inotify_loop(handle):
                     raw = data[offset + EVENT_SIZE:offset + EVENT_SIZE + length]
                     name = raw.split(b"\0", 1)[0]
                 offset += EVENT_SIZE + length
-                if mask & IN_Q_OVERFLOW:
-                    overflow = True
-                    continue
-                if name:
+                if mask & IN_Q_OVERFLOW or not name:
+                    dirty = True
+                elif not dirty:
                     pending.add(name)
+                    if len(pending) > WATCH_NAME_LIMIT:
+                        dirty = True
+                if dirty:
+                    pending.clear()
                 if first_pending_time is None:
                     first_pending_time = time.monotonic()
-            if overflow:
-                pending.clear()
-                first_pending_time = None
-                emit({"id": handle.req_id, "t": "changed", "path": to_str(handle.path_bytes), "names": []})
-        if pending and first_pending_time is not None and time.monotonic() - first_pending_time >= 0.12:
+        if first_pending_time is not None and time.monotonic() - first_pending_time >= 0.12:
             names = sorted(to_str(n) for n in pending)
-            emit({"id": handle.req_id, "t": "changed", "path": to_str(handle.path_bytes), "names": names})
+            emit({"id": handle.req_id, "t": "changed", "path": to_str(handle.path_bytes),
+                  "names": names, "dirty": dirty})
             pending.clear()
+            dirty = False
             first_pending_time = None
     try:
         if handle.wd >= 0:
@@ -329,8 +332,10 @@ def poll_loop(handle):
                 changed = set(snap) ^ set(last_snapshot)
             else:
                 changed = [n for n in set(snap) | set(last_snapshot) if snap.get(n) != last_snapshot.get(n)]
-            names = sorted(to_str(n) for n in changed) if len(changed) <= 200 else []
-            emit({"id": handle.req_id, "t": "changed", "path": to_str(handle.path_bytes), "names": names})
+            dirty = len(changed) > WATCH_NAME_LIMIT
+            names = sorted(to_str(n) for n in changed) if not dirty else []
+            emit({"id": handle.req_id, "t": "changed", "path": to_str(handle.path_bytes),
+                  "names": names, "dirty": dirty})
         if snap is not None:
             last_snapshot = snap
 
@@ -831,7 +836,7 @@ def op_copy_move(req, cancel_event, is_move):
 
     def emit_progress(current_str, force=False):
         now = time.monotonic()
-        if force or now - last_progress[0] >= 0.1:
+        if force or now - last_progress[0] >= PROGRESS_INTERVAL:
             elapsed = now - start_time
             rate = bytes_done[0] / elapsed if elapsed > 0 else 0
             emit({"id": req_id, "t": "progress", "bytes": bytes_done[0], "total": total_bytes,
@@ -4243,7 +4248,7 @@ def run_bsdtar(argv, req_id, cancel_event, total, measure, on_entry=None, stdin_
             else:
                 time.sleep(0.05)
             now = time.monotonic()
-            if now - last_report >= 0.25:
+            if now - last_report >= PROGRESS_INTERVAL:
                 last_report = now
                 measured = measure(proc.pid)
                 if measured is not None:

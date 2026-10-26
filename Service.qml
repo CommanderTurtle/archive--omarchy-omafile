@@ -152,6 +152,7 @@ Item {
 
   property int _nextId: 1
   property var _pending: ({})
+  property var _progressPending: ({})
   property var _queue: []
 
   function request(payload, handlers) {
@@ -215,6 +216,8 @@ Item {
       return op !== "bookmarks" && op !== "setbookmarks" && op !== "unlockdev"
     })
     _pending = ({})
+    _progressPending = ({})
+    progressTimer.stop()
     _thumbWaiting = ({})
     _trashWatches = ({})
     _transferOwners = ({})
@@ -230,7 +233,10 @@ Item {
       copy.finishedMs = Date.now()
       return copy
     })
-    if (stopped) transfers = next
+    if (stopped) {
+      transfers = next
+      trimTransferHistory()
+    }
     helperStable.stop()
     if (helperRestarts < helperRestartLimit) {
       helperRestarts++
@@ -267,6 +273,14 @@ Item {
     var handlers = _pending[id]
     if (!handlers) return
     var type = String(msg.t || "")
+    // Progress is an absolute snapshot. Keep only the newest one per request;
+    // terminal/control messages must see that snapshot first, never after them.
+    if (type === "progress") {
+      _progressPending[id] = msg
+      if (!progressTimer.running) progressTimer.start()
+      return
+    }
+    flushProgress(id)
     if (type === "error") {
       if (handlers.onError) handlers.onError(msg)
       releasePending(id)
@@ -280,6 +294,20 @@ Item {
     if (handlers.onData) handlers.onData(msg)
   }
 
+  function flushProgress(id) {
+    var pending = _progressPending
+    var pendingProgress = pending[id]
+    if (id === undefined) _progressPending = ({})
+    else delete _progressPending[id]
+    var ids = id === undefined ? Object.keys(pending) : [id]
+    for (var i = 0; i < ids.length; i++) {
+      var key = ids[i]
+      var msg = id === undefined ? pending[key] : pendingProgress
+      var handlers = _pending[key]
+      if (msg && handlers && handlers.onData) handlers.onData(msg)
+    }
+  }
+
   function pendingSummary() {
     var counts = {}
     for (var k in _pending) {
@@ -290,6 +318,7 @@ Item {
   }
 
   function releasePending(id) {
+    delete _progressPending[id]
     var next = {}
     for (var k in _pending) if (Number(k) !== Number(id)) next[k] = _pending[k]
     _pending = next
@@ -605,11 +634,15 @@ Item {
 
   function beginTransfer(op, sources, dest, conflict, owner) {
     var label = sources.length === 1 ? Model.basename(sources[0]) : sources.length + " items"
+    var sourceDirs = {}
+    if (op === "move")
+      for (var i = 0; i < sources.length; i++) sourceDirs[Model.dirname(sources[i])] = true
     var record = {
       id: 0, op: op, label: label, dest: dest, state: "running",
       bytes: 0, total: 0, files: 0, filesTotal: 0, current: "", rate: 0,
       errors: [], startedMs: Date.now(), finishedMs: 0, count: sources.length,
-      from: sources.length > 0 ? Model.dirname(sources[0]) : ""
+      from: sources.length > 0 ? Model.dirname(sources[0]) : "",
+      sourceDirs: Object.keys(sourceDirs)
     }
     var id = request({ op: op, sources: sources, dest: dest, conflict: conflict || "ask" }, {
       onData: function (m) {
@@ -658,6 +691,24 @@ Item {
     updateTransfer(jobId, { state: action === "cancel" ? "cancelled" : "running" })
   }
 
+  function directoryTransferring(path, realPath) {
+    var paths = [path, realPath].filter(function (p) { return p && p.charAt(0) === "/" })
+    for (var i = 0; i < transfers.length; i++) {
+      var t = transfers[i]
+      if (!transferActive(t)) continue
+      var dirs = [t.dest].concat(t.op === "move" ? (t.sourceDirs || [t.from]) : [])
+      for (var d = 0; d < dirs.length; d++) {
+        if (!dirs[d]) continue
+        var dir = Model.normalizePath(dirs[d])
+        for (var p = 0; p < paths.length; p++) {
+          var candidate = Model.normalizePath(paths[p])
+          if (dir === candidate || Model.isAncestor(dir, candidate)) return true
+        }
+      }
+    }
+    return false
+  }
+
   function updateTransfer(id, patch) {
     var next = []
     var touched = false
@@ -678,7 +729,9 @@ Item {
 
   function cancelTransfer(id) {
     cancel(id)
+    delete _transferOwners[id]
     updateTransfer(id, { state: "cancelled" })
+    trimTransferHistory()
   }
 
   function clearFinishedTransfers() {
@@ -1840,6 +1893,13 @@ Item {
     interval: 6000
     repeat: false
     onTriggered: root.markTransfersSeen()
+  }
+
+  property Timer progressTimer: Timer {
+    id: progressTimer
+    interval: 100
+    repeat: false
+    onTriggered: root.flushProgress()
   }
 
   property Timer drivesTimer: Timer {

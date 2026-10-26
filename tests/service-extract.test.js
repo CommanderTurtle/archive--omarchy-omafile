@@ -10,7 +10,7 @@ const loadModule = require('./load.js');
 function service() {
   const source = fs.readFileSync(path.join(__dirname, '..', 'Service.qml'), 'utf8');
   const requests = [];
-  const c = vm.createContext({ transfers: [], Model: loadModule('Model.js'), Date });
+  const c = vm.createContext({ transfers: [], _transferOwners: {}, Model: loadModule('Model.js'), Date });
   c.root = c;
   for (const name of ['extractArchive', 'compressPaths', 'transcodePaths', 'updateTransfer', 'transferActive', 'cancelTransfer']) {
     const match = source.match(new RegExp('^  function ' + name + '\\([^]*?^  }', 'm'));

@@ -17,7 +17,9 @@ function service(saved = {}) {
     bookmarksDirty: false, bookmarksError: '', _legacyPinned: [], _bookmarkWatchId: 0,
     _bookmarkReadPending: false, _bookmarkWritePending: false, _bookmarkRevision: 0,
     _bookmarkGeneration: 0, _stateLoaded: false, recent: [], hiddenDrives: [], placeOrder: {}, servers: [],
-    serverSettings: {}, folderViews: {}, previousFileManager: '', session: null, _queue: [], _pending: {},
+    serverSettings: {}, folderViews: {}, previousFileManager: '', session: null, _queue: [], _pending: {}, _progressPending: {},
+    progressTimer: { stop() {} },
+    seenTimer: { restart() {} },
     helperRestarts: 0, helperReady: true, helperError: '', _thumbWaiting: {},
     restartTimer: { restart() {}, running: false }, bookmarkReloadTimer: { restart() {} },
     helperStable: { stop() {} }, helperRestartLimit: 8, helperGaveUp: false, transfers: [],
@@ -169,4 +171,19 @@ test('a helper crash fails running transfers, drops trash watches and stops rest
   c.helper = { get running() { return false; }, set running(v) { started = v; } };
   c.ensureHelper();
   assert.equal(started, false, 'no restart after the limit');
+});
+
+test('helper exit drops buffered progress and bounds failed-job history without touching undo', () => {
+  const { context: c } = service();
+  let stopped = false;
+  c.progressTimer = { stop() { stopped = true; } };
+  c._progressPending = { 1: { id: 1, t: 'progress', bytes: 20 } };
+  c.transfers = Array.from({ length: 80 }, (_, i) => ({ id: i + 1, state: 'running' }));
+  c.undoStack = [{ label: 'keep me' }];
+  c.handleHelperExit();
+  assert.equal(stopped, true);
+  assert.deepEqual(plain(c._progressPending), {});
+  assert.equal(c.transfers.length, 50);
+  assert.ok(c.transfers.every(t => t.state === 'failed'));
+  assert.equal(c.undoStack[0].label, 'keep me');
 });

@@ -10,6 +10,18 @@ QtObject {
   property var clipboard: ({ mode: "", paths: [] })
   property var cutPaths: ({})
   property var transfers: []
+  readonly property var runningTransferIds: transfers.filter(function (t) { return t.state === "running" || t.state === "paused" }).map(function (t) { return t.id })
+  function directoryTransferring(path, realPath) {
+    return transfers.some(function (t) {
+      if (t.state !== "running" && t.state !== "paused") return false
+      var dirs = [t.dest].concat(t.op === "move" ? (t.sourceDirs || [t.from]) : [])
+      return dirs.some(function (dir) {
+        return dir && [path, realPath].some(function (p) {
+          return p && (Model.normalizePath(dir) === Model.normalizePath(p) || Model.isAncestor(dir, p))
+        })
+      })
+    })
+  }
   readonly property int activeTransfers: transfers.filter(function (t) { return t.state === "running" || t.state === "paused" }).length
   readonly property int finishedTransfers: transfers.length - activeTransfers
   readonly property real transferFraction: 0.5

@@ -55,7 +55,8 @@ Item {
   readonly property bool virtualView: pane.path === "recent:"
   property int _listId: 0
   property int _softId: 0
-  property var _changedNames: ({})
+  property var _changedNames: Object.create(null)
+  property int _changedNameCount: 0
   property bool _changedAll: false
   property real _lastChangeApplied: 0
   property int _watchId: 0
@@ -608,26 +609,60 @@ Item {
 
   function noteChanges(m) {
     var names = m && m.names ? m.names : []
-    if (names.length === 0 || names.length > 200) _changedAll = true
-    else for (var i = 0; i < names.length; i++) _changedNames[String(names[i])] = true
+    if ((m && m.dirty) || names.length === 0 || names.length > 200 || transferBusy()) _changedAll = true
+    if (!_changedAll) {
+      for (var i = 0; i < names.length; i++) {
+        var name = String(names[i])
+        if (Object.prototype.hasOwnProperty.call(_changedNames, name)) continue
+        _changedNames[name] = true
+        if (++_changedNameCount > 200) {
+          _changedAll = true
+          break
+        }
+      }
+    }
+    if (_changedAll) {
+      _changedNames = Object.create(null)
+      _changedNameCount = 0
+    }
+    scheduleChanges()
+  }
+
+  function transferBusy() {
+    return service && typeof service.directoryTransferring === "function"
+      && service.directoryTransferring(pane.path, pane.realPath)
+  }
+
+  function scheduleChanges() {
+    if ((!_changedAll && _changedNameCount === 0) || transferBusy()
+        || pane.loading || pane.searching || pane.virtualView) return
     if (refreshTimer.running) return
     refreshTimer.interval = Date.now() - _lastChangeApplied < 1000 ? 1000 : 180
     refreshTimer.start()
   }
 
   function applyChanges() {
+    // Do not discard changes received during an initial listing or transfer.
+    // Reconcile once the final writer has finished, including failure/cancel.
+    if (transferBusy() || pane.loading || pane.searching || pane.virtualView) return
     _lastChangeApplied = Date.now()
     var all = _changedAll
     var names = Object.keys(_changedNames)
     _changedAll = false
-    _changedNames = ({})
-    if (pane.virtualView || pane.searching || pane.loading) return
+    _changedNames = Object.create(null)
+    _changedNameCount = 0
     if (all) refresh()
     else if (names.length > 0) patchEntries(names)
   }
 
   function refresh() {
     if (!service || !pane.path) return
+    // A manual refresh or operation-completion callback already reconciles
+    // changes observed so far; do not leave a second watcher refresh queued.
+    refreshTimer.stop()
+    _changedNames = Object.create(null)
+    _changedNameCount = 0
+    _changedAll = false
     if (pane.virtualView || pane.searching) {
       reload()
       return
@@ -808,6 +843,10 @@ Item {
   readonly property int captionLineHeight: Math.round(captionFontSize * 1.4)
 
   onPathChanged: {
+    refreshTimer.stop()
+    _changedNames = Object.create(null)
+    _changedNameCount = 0
+    _changedAll = false
     dirCounts = ({})
     _countPending = ({})
   }
@@ -908,11 +947,20 @@ Item {
   onFilterChanged: if (ready) rebuild()
   onPatternsChanged: if (ready) rebuild()
   onDirsFirstChanged: if (ready) rebuild()
+  onLoadingChanged: if (!loading) scheduleChanges()
+  onSearchingChanged: if (!searching) scheduleChanges()
+
+  Connections {
+    target: pane.service
+    ignoreUnknownSignals: true
+    function onRunningTransferIdsChanged() { pane.scheduleChanges() }
+  }
 
   Component.onDestruction: {
     if (service && _watchId) service.unwatch(_watchId, _watchPath)
     if (service && _listId) service.cancel(_listId)
     if (service && _searchId) service.cancel(_searchId)
+    if (service && _softId) service.cancel(_softId)
   }
 
   Timer {

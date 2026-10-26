@@ -1762,6 +1762,32 @@ ShellRoot {
         waitRows()
       }
 
+      function test_3hc_transferChangesWaitForTheLastWriter() {
+        waitRows()
+        wait(1100)
+        var folder = pane().path
+        var first = transfer(10001, "running")
+        var second = transfer(10002, "paused")
+        first.dest = folder
+        second.dest = folder
+        second.op = "move"
+        mock.transfers = [first, second]
+        mock.calls = []
+        for (var i = 0; i < 1000; i++) pane().noteChanges({ names: ["new-" + i] })
+        wait(1200)
+        compare(count("listDirectory"), 0, "no full scans while writing")
+        compare(count("statPaths"), 0, "no per-write model patches either")
+        compare(Object.keys(pane()._changedNames).length, 0, "dirty flag replaces accumulated names")
+        mock.transfers = [mock.transfers[1]]
+        wait(1200)
+        compare(count("listDirectory"), 0, "a paused writer still holds the gate")
+        mock.transfers = []
+        tryVerify(function () { return count("listDirectory") === 1 }, 2500, "one final scan")
+        wait(1200)
+        compare(count("listDirectory"), 1, "the gate releases without a refresh loop")
+        waitRows()
+      }
+
       function test_zz_done() {
         if (failures > 0) return
         console.log("OMAFILE_BROWSER_FLOWS_PASSED")

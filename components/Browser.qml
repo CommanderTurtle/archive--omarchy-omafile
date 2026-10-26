@@ -3691,7 +3691,7 @@ Item {
         objectName: "dialogCard"
         anchors.centerIn: parent
         width: Math.min(root.width - Style.space(24), root.dialogMode === "settings" ? Style.space(780)
-          : (root.dialogMode === "shortcuts" ? Style.space(470)
+          : (root.dialogMode === "shortcuts" ? Style.space(600)
           : (root.dialogMode === "properties" ? Style.space(460)
           : (root.dialogMode === "openwith" ? Style.space(540) : Style.space(360)))))
         height: dialogColumn.implicitHeight + Style.space(28)
@@ -3926,6 +3926,7 @@ Item {
 
             Column {
               id: shortcutColumn
+              objectName: "shortcutColumn"
               width: parent.width
               spacing: Style.space(2)
 
@@ -3935,7 +3936,8 @@ Item {
                 delegate: Item {
                   required property var modelData
                   width: shortcutColumn.width
-                  height: modelData.section ? Style.space(26) : Style.space(20)
+                  height: modelData.section ? Style.space(26)
+                    : Math.max(Style.space(20), shortcutKeys.implicitHeight + Style.space(4), shortcutLabel.implicitHeight + Style.space(4))
 
                   Text {
                     textFormat: Text.PlainText
@@ -3949,11 +3951,14 @@ Item {
                   }
 
                   Text {
+                    id: shortcutKeys
                     textFormat: Text.PlainText
                     anchors.left: parent.left
-                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.top: parent.top
+                    anchors.topMargin: Style.space(2)
                     visible: modelData.section === undefined
-                    width: Style.space(190)
+                    width: Style.space(220)
+                    wrapMode: Text.Wrap
                     text: modelData.keys ? modelData.keys : ""
                     color: Color.popups.text
                     font.family: Style.font.family
@@ -3961,17 +3966,20 @@ Item {
                   }
 
                   Text {
+                    id: shortcutLabel
                     textFormat: Text.PlainText
                     anchors.left: parent.left
-                    anchors.leftMargin: Style.space(196)
+                    anchors.leftMargin: Style.space(228)
                     anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.rightMargin: Style.space(10)
+                    anchors.top: parent.top
+                    anchors.topMargin: Style.space(2)
                     visible: modelData.section === undefined
                     text: modelData.label ? modelData.label : ""
                     color: Util.alpha(Color.popups.text, 0.65)
                     font.family: Style.font.family
                     font.pixelSize: Style.font.bodySmall
-                    elide: Text.ElideRight
+                    wrapMode: Text.Wrap
                   }
                 }
               }
@@ -4852,6 +4860,8 @@ Item {
       { keys: "Alt+Home", label: "Go to your home folder" },
       { keys: "Ctrl+L", label: "Type a path" },
       { keys: "/  or  ~", label: "Type a path, starting from root or home" },
+      { keys: "Arrows", label: "Move the cursor, Shift+Arrows to select as you go" },
+      { keys: "PageUp / PageDown", label: "Move the cursor a page at a time" },
       { keys: "Home / End", label: "First and last item" },
       { keys: "F5 / Ctrl+R", label: "Refresh" },
       { keys: "Ctrl+.", label: "Open a terminal in this folder" },
@@ -4859,9 +4869,10 @@ Item {
       { keys: "Tab", label: "Sidebar, or the other pane when split" },
       { keys: "Shift+Tab", label: "Jump to the sidebar" },
       { keys: "Arrows, Enter", label: "Move and open, once in the sidebar" },
+      { keys: "Ctrl+Up / Ctrl+Down", label: "Move a sidebar row within its section" },
       { keys: "Ctrl+Enter", label: "Open a sidebar place in a new tab" },
       { keys: "Delete", label: "Remove a bookmark or hide a drive, in the sidebar" },
-      { keys: "Escape", label: "Leave the sidebar" },
+      { keys: "Escape / Right", label: "Leave the sidebar" },
       { keys: "Shift+F10 / Menu", label: "Open the context menu on the current item" },
       { keys: "F10", label: "Open the menu for this folder" },
       { section: "Selection" },
@@ -4870,10 +4881,10 @@ Item {
       { keys: "Shift+Click, Shift+Arrows", label: "Select a range" },
       { keys: "Ctrl+A", label: "Select everything" },
       { keys: "Ctrl+Shift+I", label: "Invert the selection" },
-      { keys: "Escape", label: "Clear the selection" },
+      { keys: "Escape", label: "Close search or the filter, then clear the selection" },
       { section: "Files" },
       { keys: "Ctrl+C / Ctrl+X / Ctrl+V", label: "Copy, cut and paste" },
-      { keys: "Ctrl+Z / Ctrl+Shift+Z", label: "Undo and redo" },
+      { keys: "Ctrl+Z / Ctrl+Shift+Z", label: "Undo and redo the last file change" },
       { keys: "F2", label: "Rename" },
       { keys: "Ctrl+E", label: "Edit a text file in Omafile" },
       { keys: "Ctrl+Shift+N", label: "New folder" },
@@ -4898,10 +4909,6 @@ Item {
       { keys: "Ctrl+1 / Ctrl+2 / Ctrl+3 / Ctrl+4", label: "List, grid, compact and gallery" },
       { keys: "Ctrl+Plus / Ctrl+Minus", label: "Zoom in and out, also Ctrl with the scroll wheel" },
       { keys: "Ctrl+0", label: "Reset the zoom to 100 percent" },
-      { keys: "Space", label: "Preview the item under the cursor" },
-      { keys: "K / P", label: "Play or pause audio, in the preview" },
-      { keys: "Shift+Left / Shift+Right", label: "Skip back or forward 5 seconds, in the preview" },
-      { keys: "M", label: "Mute audio, in the preview" },
       { keys: "Mouse back / forward", label: "Back and forward" },
       { keys: "Ctrl+H", label: "Show hidden files" },
       { keys: "F9 / Ctrl+B", label: "Show or hide the sidebar" },
@@ -4910,8 +4917,33 @@ Item {
       { keys: "Ctrl+Comma", label: "Settings" },
       { keys: "F1 / Ctrl+?", label: "This list" },
       { keys: "Ctrl+Q", label: "Close the window" },
+      { section: "Preview" },
+      { keys: "Space", label: "Open or close the preview of the item under the cursor" },
+      { keys: "Arrows", label: "Previous and next item" },
+      { keys: "Enter", label: "Open the item being previewed" },
+      { keys: "Plus / Minus / 0", label: "Zoom a picture in, out and back to fit" },
+      { keys: "K / P", label: "Play or pause audio" },
+      { keys: "Shift+Left / Shift+Right", label: "Skip back or forward 5 seconds" },
+      { keys: "M", label: "Mute audio" },
+      { keys: "Escape", label: "Close the preview" },
+      { section: "Text editor" },
+      { keys: "Ctrl+S", label: "Save" },
+      { keys: "Ctrl+F", label: "Find" },
+      { keys: "Enter / Shift+Enter", label: "Next and previous match, in the find field" },
+      { keys: "F3 / Shift+F3", label: "Next and previous match" },
+      { keys: "Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y", label: "Undo and redo" },
+      { keys: "Tab / Shift+Tab", label: "Indent and outdent, every selected line at once" },
+      { keys: "PageUp / PageDown", label: "Move a page, Shift+PageUp / PageDown to select" },
+      { keys: "Alt+Z", label: "Turn line wrapping on or off" },
+      { keys: "Escape / Ctrl+W / Ctrl+Q", label: "Close the editor" },
+      { section: "Duplicates" },
+      { keys: "Up / Down", label: "Previous and next group of copies" },
+      { keys: "Left / Right", label: "Previous and next copy to compare" },
+      { keys: "Delete", label: "Move the copy on the right to trash" },
+      { keys: "Escape", label: "Close" },
       { section: "When a file already exists" },
-      { keys: "R / K / S / A", label: "Replace, keep both, skip, skip all" }
+      { keys: "R / K / S / A", label: "Replace, keep both, skip, skip all" },
+      { keys: "Escape", label: "Skip this one" }
     ]
   }
 

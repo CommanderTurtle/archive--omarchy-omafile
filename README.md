@@ -269,6 +269,8 @@ Omafile follows GNOME Files conventions, so shortcuts you already know work here
 | `Alt+Home` | Go to your home folder |
 | `Ctrl+L` | Type a path |
 | `/` or `~` | Type a path, starting from root or home |
+| Arrows | Move the cursor, `Shift+Arrows` to select as you go |
+| `PageUp` / `PageDown` | Move the cursor a page at a time |
 | `Home` / `End` | First and last item |
 | `F5` / `Ctrl+R` | Refresh |
 | `Ctrl+.` | Open a terminal in this folder |
@@ -285,7 +287,7 @@ Focus starts in the file list. Tab moves it to the sidebar, or to the other pane
 | `Ctrl+Enter` | Open a sidebar place in a new tab |
 | `Delete` | Remove a bookmark or hide a drive, in the sidebar |
 | `Ctrl+Up` / `Ctrl+Down` | Move a sidebar row within its section |
-| `Escape` | Leave the sidebar |
+| `Escape` / `Right` | Leave the sidebar |
 | `Shift+F10` / `Menu` | Open the context menu on the current item |
 | `F10` | Open the menu for the folder itself |
 
@@ -300,19 +302,19 @@ The context menu is a real focus target: arrows move through it, Enter or Space 
 | `Shift+Click`, `Shift+Arrows` | Select a range |
 | `Ctrl+A` | Select everything |
 | `Ctrl+Shift+I` | Invert the selection |
-| `Escape` | Clear the selection |
+| `Escape` | Close search or the filter, then clear the selection |
 
 ### Files
 
 | Keys | Action |
 |------|--------|
 | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Copy, cut and paste |
-| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo and redo |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo and redo the last file change |
 | `F2` | Rename |
 | `Ctrl+E` | Edit a text file in Omafile |
 | `Ctrl+Shift+N` | New folder |
 | `Ctrl+N` | New file |
-| `Delete` | Move to trash, or delete permanently when already in the trash |
+| `Delete` | Move to trash, or delete permanently on network shares and inside the trash |
 | `Shift+Delete` | Delete permanently |
 | `Ctrl+I` / `Alt+Enter` | Properties |
 | `Ctrl+D` | Bookmark this folder |
@@ -343,11 +345,6 @@ Undo covers trash, rename, move, copy and new file or folder. Undoing a trash pu
 | `Ctrl+1` / `Ctrl+2` / `Ctrl+3` / `Ctrl+4` | List, grid, compact and gallery |
 | `Ctrl+Plus` / `Ctrl+Minus`, or `Ctrl` + scroll | Zoom in and out |
 | `Ctrl+0` | Reset the zoom to 100 percent |
-| `Space` | Preview the item under the cursor |
-| `K` / `P` | Play or pause audio, in the preview |
-| `Shift+Left` / `Shift+Right` | Skip back or forward 5 seconds, in the preview |
-| `M` | Mute audio, in the preview |
-| `+` / `-` / `0` | Zoom a picture in, out and back to fit, in the preview |
 | `Ctrl+H` | Show hidden files |
 | `F9` / `Ctrl+B` | Show or hide the sidebar |
 | `Ctrl+F`, or just type | Search in this folder |
@@ -358,11 +355,48 @@ Undo covers trash, rename, move, copy and new file or folder. Undoing a trash pu
 
 Typing an ordinary character opens the search box with that character already typed, the way GNOME Files does.
 
+### Preview
+
+| Keys | Action |
+|------|--------|
+| `Space` | Open or close the preview of the item under the cursor |
+| Arrows | Previous and next item |
+| `Enter` | Open the item being previewed |
+| `+` / `-` / `0` | Zoom a picture in, out and back to fit |
+| `K` / `P` | Play or pause audio |
+| `Shift+Left` / `Shift+Right` | Skip back or forward 5 seconds |
+| `M` | Mute audio |
+| `Escape` | Close the preview |
+
+### Text editor
+
+| Keys | Action |
+|------|--------|
+| `Ctrl+S` | Save |
+| `Ctrl+F` | Find |
+| `Enter` / `Shift+Enter` | Next and previous match, in the find field |
+| `F3` / `Shift+F3` | Next and previous match |
+| `Ctrl+Z` / `Ctrl+Shift+Z` or `Ctrl+Y` | Undo and redo |
+| `Tab` / `Shift+Tab` | Indent and outdent, every selected line at once |
+| `PageUp` / `PageDown` | Move a page, `Shift+PageUp` / `Shift+PageDown` to select |
+| `Alt+Z` | Turn line wrapping on or off |
+| `Escape` / `Ctrl+W` / `Ctrl+Q` | Close the editor |
+
+### Duplicates
+
+| Keys | Action |
+|------|--------|
+| `Up` / `Down` | Previous and next group of copies |
+| `Left` / `Right` | Previous and next copy to compare |
+| `Delete` | Move the copy on the right to trash |
+| `Escape` | Close |
+
 ### When a file already exists
 
 | Keys | Action |
 |------|--------|
 | `R` / `K` / `S` / `A` | Replace, keep both, skip, skip all |
+| `Escape` | Skip this one |
 
 Escape skips the file.
 

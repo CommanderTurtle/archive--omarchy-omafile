@@ -2244,6 +2244,26 @@ ShellRoot {
         browser.closeMenu()
       }
 
+      function test_9kf_shortcutsShowInFull() {
+        var sections = browser.shortcutRows().filter(function (r) { return r.section }).map(function (r) { return r.section })
+        verify(sections.indexOf("Preview") >= 0)
+        verify(sections.indexOf("Text editor") >= 0)
+        verify(sections.indexOf("Duplicates") >= 0)
+        browser.showDialog("shortcuts", "Keyboard shortcuts", "", null)
+        var column = findChild(browser, "shortcutColumn")
+        waitForRendering(column)
+        var rows = browser.shortcutRows().filter(function (r) { return r.keys }).length
+        var texts = textsIn(column, []).filter(function (t) { return sections.indexOf(t.text) < 0 })
+        compare(texts.length, rows * 2)
+        for (var i = 0; i < texts.length; i++) {
+          var t = texts[i]
+          verify(t.elide === Text.ElideNone, t.text + " is never cut short")
+          verify(t.contentWidth <= t.width + 1, t.text + " fits its column")
+          verify(t.y + t.contentHeight <= t.parent.height + 1, t.text + " fits its row")
+        }
+        browser.closeDialog()
+      }
+
       function test_9kd_linkTarget() {
         var saved = mock.files
         mock.files = [["alpha.yml", "f", 30, 300, 420, null], ["note", "l", 1, 0, 41471, "../srv/real.txt"],

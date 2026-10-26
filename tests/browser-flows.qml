@@ -2218,6 +2218,33 @@ ShellRoot {
         mock.statItems = savedStat
       }
 
+      function test_9kd_linkTarget() {
+        var saved = mock.files
+        mock.files = [["alpha.yml", "f", 30, 300, 420, null], ["note", "l", 1, 0, 41471, "../srv/real.txt"],
+                      ["proj", "L", 0, 0, 41471, "/opt/proj"]]
+        pane().navigate("/tmp/a", true)
+        waitRows()
+        mock.calls = []
+        pane().setCursor(1, false, false)
+        browser.menuEntry = pane().cursorEntry()
+        browser.menuActions = browser.contextActions(browser.menuEntry)
+        menuItem("Go to link target")
+        tryCompare(pane(), "path", "/tmp/srv")
+        compare(mock.called("listDirectory").args[0], "/tmp/srv")
+        waitRows()
+        pane().setCursor(2, false, false)
+        browser.menuEntry = pane().cursorEntry()
+        browser.menuActions = browser.contextActions(browser.menuEntry)
+        menuItem("Go to link target")
+        tryCompare(pane(), "path", "/opt/proj")
+        waitRows()
+        pane().setCursor(0, false, false)
+        verify(menuLabels(browser.contextActions(pane().cursorEntry())).indexOf("Go to link target") < 0)
+        mock.files = saved
+        pane().navigate("/tmp", true)
+        waitRows()
+      }
+
       function test_9k_transcode() {
         waitRows()
         var png = Model.decodeEntry(["beta.png", "f", 10, 100, 420, null], "/tmp")

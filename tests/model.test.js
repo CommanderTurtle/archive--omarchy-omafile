@@ -329,7 +329,12 @@ test('kindLabel priority and extension derived labels', function () {
   assert.equal(Model.kindLabel(Model.decodeEntry(['l', 'l', 0, 0, 41471, '/t'], '/x')), 'Symlink');
   assert.equal(Model.kindLabel(Model.decodeEntry(['b', 'b', 0, 0, 41471, '/t'], '/x')), 'Broken link');
   assert.equal(Model.kindLabel(Model.decodeEntry(['run.sh', 'f', 1, 0, 33261, null], '/x')), 'Shell script');
-  assert.equal(Model.kindLabel(Model.decodeEntry(['run', 'f', 1, 0, 33261, null], '/x')), 'Unknown');
+  assert.equal(Model.kindLabel(Model.decodeEntry(['run', 'f', 1, 0, 33261, null], '/x')), 'Executable');
+  assert.equal(Model.kindLabel(Model.decodeEntry(['notes', 'f', 1, 0, 33188, null], '/x')), 'Unknown');
+  assert.equal(Model.kindLabel(Model.decodeEntry(['Screenshot 10.30.45', 'f', 1, 0, 33188, null], '/x')), 'Unknown');
+  assert.equal(Model.kindLabel(Model.decodeEntry(['notes. draft', 'f', 1, 0, 33188, null], '/x')), 'Unknown');
+  assert.equal(Model.kindLabel(Model.decodeEntry(['setup.run', 'f', 1, 0, 33261, null], '/x')), '.run');
+  assert.equal(Model.kindLabel(Model.decodeEntry(['Pic.PNG', 'f', 1, 0, 33188, null], '/x')), 'PNG image');
   assert.equal(Model.kindLabel(Model.decodeEntry(['pic.png', 'f', 1, 0, 33188, null], '/x')), 'PNG image');
   assert.equal(Model.kindLabel(Model.decodeEntry(['notes.txt', 'f', 1, 0, 33188, null], '/x')), 'Plain text');
   assert.equal(Model.kindLabel(Model.decodeEntry(['data.xyz', 'f', 1, 0, 33188, null], '/x')), '.xyz');

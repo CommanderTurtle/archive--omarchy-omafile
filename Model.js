@@ -606,8 +606,9 @@ function kindLabel(entry) {
   if (entry.isLink) return 'Symlink';
   if (entry.isDir) return 'Folder';
   var ext = String(entry.ext || '').toLowerCase();
-  if (ext === '') return 'Unknown';
-  return extLabels[ext] || '.' + ext;
+  if (extLabels[ext]) return extLabels[ext];
+  if (/^[a-z0-9_+-]{1,10}$/.test(ext) && /[a-z]/.test(ext)) return '.' + ext;
+  return entry.isExec ? 'Executable' : 'Unknown';
 }
 
 function alwaysOpenLabel(entry) {

@@ -1422,7 +1422,7 @@ Item {
     if (!entry || !entry.linkTarget) return
     var p = activePane()
     var target = String(entry.linkTarget)
-    if (target.charAt(0) !== "/") target = Model.normalizePath(Model.joinPath(p.path, target))
+    if (target.charAt(0) !== "/") target = Model.normalizePath(Model.joinPath(Model.dirname(entry.path), target))
     if (entry.isDir) {
       p.navigate(target, true)
       return
@@ -1458,7 +1458,7 @@ Item {
       items.push({ key: "paste", label: "Paste", glyph: Icons.actionGlyph("paste"), hint: "Ctrl+V", disabled: !service })
       items.push({ key: "copypath", label: "Copy path", glyph: Icons.actionGlyph("copy") })
       if (entry.isLink && !entry.isBroken && entry.linkTarget)
-        items.push({ key: "reveallink", label: "Go to Symlink Location", glyph: Icons.actionGlyph("open") })
+        items.push({ key: "reveallink", label: "Go to link target", glyph: Icons.actionGlyph("open") })
       separator()
       var trashed = Model.allInTrash([entry.path], trashRoot())
       if (trashed && Model.trashItemNames([entry.path], trashRoot()).length > 0)

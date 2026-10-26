@@ -568,8 +568,8 @@ function kindLabel(entry) {
   if (entry.isBroken) return 'Broken link';
   if (entry.isLink) return 'Symlink';
   if (entry.isDir) return 'Folder';
-  if (entry.isExec) return 'Executable';
-  return extensionLabel(entry.ext);
+  var ext = String(entry.ext || '').toLowerCase();
+  return ext !== '' ? '.' + ext : 'Unknown';
 }
 
 function alwaysOpenLabel(entry) {

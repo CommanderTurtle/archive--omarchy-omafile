@@ -328,11 +328,12 @@ test('kindLabel priority and extension derived labels', function () {
   assert.equal(Model.kindLabel(Model.decodeEntry(['d', 'd', 0, 0, 16877, null], '/x')), 'Folder');
   assert.equal(Model.kindLabel(Model.decodeEntry(['l', 'l', 0, 0, 41471, '/t'], '/x')), 'Symlink');
   assert.equal(Model.kindLabel(Model.decodeEntry(['b', 'b', 0, 0, 41471, '/t'], '/x')), 'Broken link');
-  assert.equal(Model.kindLabel(Model.decodeEntry(['run.sh', 'f', 1, 0, 33261, null], '/x')), '.sh');
+  assert.equal(Model.kindLabel(Model.decodeEntry(['run.sh', 'f', 1, 0, 33261, null], '/x')), 'Shell script');
   assert.equal(Model.kindLabel(Model.decodeEntry(['run', 'f', 1, 0, 33261, null], '/x')), 'Unknown');
-  assert.equal(Model.kindLabel(Model.decodeEntry(['pic.png', 'f', 1, 0, 33188, null], '/x')), '.png');
-  assert.equal(Model.kindLabel(Model.decodeEntry(['notes.txt', 'f', 1, 0, 33188, null], '/x')), '.txt');
+  assert.equal(Model.kindLabel(Model.decodeEntry(['pic.png', 'f', 1, 0, 33188, null], '/x')), 'PNG image');
+  assert.equal(Model.kindLabel(Model.decodeEntry(['notes.txt', 'f', 1, 0, 33188, null], '/x')), 'Plain text');
   assert.equal(Model.kindLabel(Model.decodeEntry(['data.xyz', 'f', 1, 0, 33188, null], '/x')), '.xyz');
+  assert.equal(Model.kindLabel(Model.decodeEntry(['Browser.qml', 'f', 1, 0, 33188, null], '/x')), '.qml');
 });
 
 test('categoryFor covers every category', function () {

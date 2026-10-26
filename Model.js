@@ -569,7 +569,8 @@ function kindLabel(entry) {
   if (entry.isLink) return 'Symlink';
   if (entry.isDir) return 'Folder';
   var ext = String(entry.ext || '').toLowerCase();
-  return ext !== '' ? '.' + ext : 'Unknown';
+  if (ext === '') return 'Unknown';
+  return extLabels[ext] || '.' + ext;
 }
 
 function alwaysOpenLabel(entry) {

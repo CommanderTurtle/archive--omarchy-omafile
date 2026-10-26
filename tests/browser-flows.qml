@@ -2218,6 +2218,32 @@ ShellRoot {
         mock.statItems = savedStat
       }
 
+      function textsIn(item, out) {
+        for (var i = 0; i < item.children.length; i++) {
+          var c = item.children[i]
+          if (c.text !== undefined && c.visible && String(c.text) !== "") out.push(c)
+          textsIn(c, out)
+        }
+        return out
+      }
+
+      function test_9ke_menuFitsItsLabels() {
+        waitRows()
+        pane().setCursor(2, false, false)
+        compare(pane().cursorEntry().name, "docs")
+        browser.openMenuAtCursor()
+        var menu = findChild(browser, "contextMenu")
+        tryVerify(function () { return menu.visible })
+        waitForRendering(menu)
+        var labels = textsIn(menu, [])
+        verify(labels.some(function (t) { return t.text === "Find duplicates in this folder" }))
+        for (var i = 0; i < labels.length; i++) {
+          var right = labels[i].mapToItem(menu, labels[i].implicitWidth, 0).x
+          verify(right <= menu.width - menu.border.width, labels[i].text + " fits inside the menu")
+        }
+        browser.closeMenu()
+      }
+
       function test_9kd_linkTarget() {
         var saved = mock.files
         mock.files = [["alpha.yml", "f", 30, 300, 420, null], ["note", "l", 1, 0, 41471, "../srv/real.txt"],

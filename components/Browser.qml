@@ -2143,8 +2143,21 @@ Item {
     items.push({ key: "captions", label: "Grid captions\u2026", glyph: Icons.actionGlyph("properties") })
     return items
   }
+  FontMetrics { id: menuLabelMetrics; font.family: Style.font.family; font.pixelSize: Style.font.bodySmall }
+  FontMetrics { id: menuHintMetrics; font.family: Style.font.family; font.pixelSize: Style.font.caption }
+
   function menuWidth() {
-    return Style.space(230)
+    var widest = 0
+    for (var i = 0; i < menuActions.length; i++) {
+      var a = menuActions[i]
+      if (!a || !a.label || a.kind === "zoom") continue
+      var w = a.kind === "header" ? menuHintMetrics.advanceWidth(a.label)
+        : menuLabelMetrics.advanceWidth(a.label) + Style.space(24) + (a.hint ? menuHintMetrics.advanceWidth(a.hint) + Style.space(24) : 0)
+      widest = Math.max(widest, w)
+    }
+    var least = Style.space(230)
+    var room = Math.max(least, keyCatcher.width - Style.space(16))
+    return Math.min(room, Math.max(least, Math.ceil(widest) + Style.space(32)))
   }
 
   function openToolbarMenu(kind, anchor) {
@@ -3229,6 +3242,7 @@ Item {
 
     Rectangle {
       id: contextMenu
+      objectName: "contextMenu"
       visible: root.menuOpen
       x: Math.max(0, Math.min(root.menuX, keyCatcher.width - width - Style.space(8)))
       y: Math.max(0, Math.min(root.menuY, keyCatcher.height - height - Style.space(8)))

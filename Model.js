@@ -605,8 +605,10 @@ function kindLabel(entry) {
   if (entry.isBroken) return 'Broken link';
   if (entry.isLink) return 'Symlink';
   if (entry.isDir) return 'Folder';
-  if (entry.isExec) return 'Executable';
-  return extensionLabel(entry.ext);
+  var ext = String(entry.ext || '').toLowerCase();
+  if (extLabels[ext]) return extLabels[ext];
+  if (/^[a-z0-9_+-]{1,10}$/.test(ext) && /[a-z]/.test(ext)) return '.' + ext;
+  return entry.isExec ? 'Executable' : 'Unknown';
 }
 
 function alwaysOpenLabel(entry) {

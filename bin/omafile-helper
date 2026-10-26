@@ -626,6 +626,19 @@ def link_trusted(lst, dir_fd, mounts):
     return True
 
 
+def trusted_link_target(dir_fd, name, mounts, message, shown):
+    fd = os.open(name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
+    try:
+        lst = os.fstat(fd)
+        if not stat.S_ISLNK(lst.st_mode):
+            return None
+        if not link_trusted(lst, dir_fd, mounts):
+            raise OSError(errno.ELOOP, message, to_str(shown))
+        return os.readlink(b"", dir_fd=fd)
+    finally:
+        os.close(fd)
+
+
 def open_dir_safely(path_bytes, create=False):
     if not path_bytes.startswith(b"/"):
         raise OSError(errno.EINVAL, "path must be absolute", to_str(path_bytes))
@@ -655,17 +668,15 @@ def open_dir_safely(path_bytes, create=False):
             except OSError as e:
                 if e.errno not in (errno.ELOOP, errno.ENOTDIR):
                     raise
-                lst = os.lstat(comp, dir_fd=fd)
-                if not stat.S_ISLNK(lst.st_mode):
-                    raise
                 if mounts is None:
                     mounts = mount_entries()
-                if not link_trusted(lst, fd, mounts):
-                    raise OSError(errno.ELOOP, "a folder in this path is a link Omafile will not follow here", to_str(path_bytes))
+                target = trusted_link_target(fd, comp, mounts,
+                                             "a folder in this path is a link Omafile will not follow here", path_bytes)
+                if target is None:
+                    raise
                 hops += 1
                 if hops > MAX_LINK_HOPS:
                     raise OSError(errno.ELOOP, "too many links", to_str(path_bytes))
-                target = os.readlink(comp, dir_fd=fd)
                 if target.startswith(b"/"):
                     os.close(fd)
                     fd = os.open(b"/", PATH_OPEN_FLAGS)
@@ -4730,9 +4741,9 @@ def resolve_trusted_leaf(path_bytes):
                 return os.path.join(base, leaf)
             if mounts is None:
                 mounts = mount_entries()
-            if not link_trusted(lst, pfd, mounts):
-                raise OSError(errno.ELOOP, "this is a link Omafile will not follow", to_str(current))
-            target = os.readlink(leaf, dir_fd=pfd)
+            target = trusted_link_target(pfd, leaf, mounts, "this is a link Omafile will not follow", current)
+            if target is None:
+                return os.path.join(base, leaf)
         finally:
             os.close(pfd)
         current = os.path.normpath(target if target.startswith(b"/") else os.path.join(base, target))

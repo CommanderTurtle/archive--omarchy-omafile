@@ -175,6 +175,50 @@ class PathSafetyTests(unittest.TestCase):
         self.assertEqual(code, errno.ELOOP)
         self.assertEqual(ran, [])
 
+    def swap_during_trust_check(self, link, replacement):
+        original = self.helper.link_trusted
+        swapped = []
+
+        def check_then_swap(lst, dir_fd, mounts):
+            trusted = original(lst, dir_fd, mounts)
+            if not swapped:
+                os.unlink(link)
+                os.symlink(replacement, link)
+                swapped.append(True)
+            return trusted
+
+        return patch.object(self.helper, "link_trusted", side_effect=check_then_swap), swapped
+
+    def test_a_leaf_link_swapped_after_its_trust_check_is_not_read(self):
+        share = self.private_picture_behind_a_shared_leaf()
+        mine = share / "mine.png"
+        mine.write_bytes(self.helper.PNG_MAGIC + b"\0" * 64)
+        link = share / "pick.png"
+        os.symlink(mine, link)
+        swap, swapped = self.swap_during_trust_check(link, self.root / "private" / "secret.png")
+        with swap:
+            resolved = self.helper.resolve_trusted_leaf(os.fsencode(link))
+        self.assertTrue(swapped)
+        self.assertEqual(resolved, os.fsencode(os.path.realpath(mine)))
+
+    def test_a_folder_link_swapped_after_its_trust_check_is_not_followed(self):
+        private = self.root / "private"
+        private.mkdir()
+        (private / "secret.png").write_text("secret")
+        mine = self.root / "mine"
+        mine.mkdir()
+        (mine / "secret.png").write_text("mine")
+        link = self.root / "dir"
+        os.symlink(mine, link)
+        swap, swapped = self.swap_during_trust_check(link, private)
+        with swap:
+            fd = self.helper.open_dir_safely(os.fsencode(link))
+        try:
+            self.assertTrue(swapped)
+            self.assertEqual(os.readlink("/proc/self/fd/%d" % fd), os.path.realpath(mine))
+        finally:
+            os.close(fd)
+
     def test_transcode_through_a_trusted_local_link_still_works(self):
         share = self.private_picture_behind_a_shared_leaf()
         code, ran = self.transcode(share / "holiday.png")

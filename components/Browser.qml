@@ -4330,17 +4330,6 @@ Item {
               Button { text: "Merge (recursive)"; bordered: true; onClicked: root.resolveConflict("merge", false) }
             }
 
-            CheckBox {
-              text: "Do for all  A"
-              font.family: Style.font.family
-              font.pixelSize: Style.font.bodySmall
-              palette.windowText: Color.popups.text
-              palette.highlight: Color.accent
-              visible: !root.folderConflict
-              checked: root.conflictAll
-              onToggled: root.conflictAll = checked
-            }
-
             Row {
               visible: !root.folderConflict
               spacing: Style.space(8)
@@ -4361,6 +4350,25 @@ Item {
                 text: "Skip  S"
                 bordered: true
                 onClicked: root.resolveConflict("skip", root.conflictAll)
+              }
+
+              Row {
+                spacing: Style.space(4)
+                CheckBox {
+                  text: "A"
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.bodySmall
+                  palette.windowText: Color.popups.text
+                  palette.highlight: Color.accent
+                  checked: root.conflictAll
+                  onToggled: root.conflictAll = checked
+                }
+                Text {
+                  text: "(do for all)"
+                  color: Color.popups.text
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                }
               }
             }
           }

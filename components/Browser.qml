@@ -32,6 +32,8 @@ Item {
   property string dialogTitle: ""
   property string dialogError: ""
   property var dialogPayload: null
+  property bool conflictAll: false
+  readonly property bool folderConflict: dialogMode === "conflict" && !!(dialogPayload && dialogPayload.info && dialogPayload.info.folders)
   property string confirmAction: ""
   property string settingsSection: "opening"
   readonly property real viewScale: clampViewScale(service ? service.settingNow("viewScale", 1) : 1)
@@ -2119,14 +2121,21 @@ Item {
     if (confirm.opened) return confirm.handleKey(event)
     if (dialogMode === "conflict") {
       if (Date.now() - conflictShownMs < conflictKeyDelay) return true
+      if (folderConflict) {
+        if (event.key === Qt.Key_R) resolveConflict("overwrite", false)
+        else if (event.key === Qt.Key_M) resolveConflict("merge", false)
+        else if (event.key === Qt.Key_Escape) resolveConflict("cancel", false)
+        return true
+      }
       if (event.key === Qt.Key_Escape) { resolveConflict("skip", false); return true }
-      if (event.key === Qt.Key_R) { resolveConflict("overwrite", false); return true }
-      if (event.key === Qt.Key_K) { resolveConflict("rename", false); return true }
-      if (event.key === Qt.Key_S) { resolveConflict("skip", false); return true }
-      if (event.key === Qt.Key_A) { resolveConflict("skip", true); return true }
+      if (event.key === Qt.Key_R) { resolveConflict("overwrite", conflictAll); return true }
+      if (event.key === Qt.Key_K) { resolveConflict("rename", conflictAll); return true }
+      if (event.key === Qt.Key_S) { resolveConflict("skip", conflictAll); return true }
+      if (event.key === Qt.Key_A) { conflictAll = !conflictAll; return true }
       return true
     }
     if (dialogMode !== "") return handleDialogKey(event)
+    if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab)) { cycleTab(event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier) ? -1 : 1); return true }
     if (previewOpen) return handlePreviewKey(event)
     if (menuOpen) return handleMenuKey(event)
     if (focusZone === "sidebar") return handleSidebarKey(event)
@@ -3389,7 +3398,7 @@ Item {
       MouseArea {
         anchors.fill: parent
         onClicked: {
-          if (root.dialogMode === "conflict") root.resolveConflict("skip", false)
+          if (root.dialogMode === "conflict") root.resolveConflict(root.folderConflict ? "cancel" : "skip", false)
           else root.closeDialog()
         }
       }
@@ -4297,30 +4306,43 @@ Item {
             }
 
             Row {
+              visible: root.folderConflict
+              spacing: Style.space(8)
+              Button { text: "Replace (folders)"; bordered: true; onClicked: root.resolveConflict("overwrite", false) }
+              Button { text: "Merge (recursive)"; bordered: true; onClicked: root.resolveConflict("merge", false) }
+            }
+
+            CheckBox {
+              text: "Do for all  A"
+              font.family: Style.font.family
+              font.pixelSize: Style.font.bodySmall
+              palette.windowText: Color.popups.text
+              palette.highlight: Color.accent
+              visible: !root.folderConflict
+              checked: root.conflictAll
+              onToggled: root.conflictAll = checked
+            }
+
+            Row {
+              visible: !root.folderConflict
               spacing: Style.space(8)
 
               Button {
                 text: "Replace  R"
                 bordered: true
-                onClicked: root.resolveConflict("overwrite", false)
+                onClicked: root.resolveConflict("overwrite", root.conflictAll)
               }
 
               Button {
                 text: "Keep both  K"
                 bordered: true
-                onClicked: root.resolveConflict("rename", false)
+                onClicked: root.resolveConflict("rename", root.conflictAll)
               }
 
               Button {
                 text: "Skip  S"
                 bordered: true
-                onClicked: root.resolveConflict("skip", false)
-              }
-
-              Button {
-                text: "Skip all  A"
-                bordered: true
-                onClicked: root.resolveConflict("skip", true)
+                onClicked: root.resolveConflict("skip", root.conflictAll)
               }
             }
           }
@@ -4583,6 +4605,7 @@ Item {
     var payload = dialogPayload
     if (!payload || !payload.info) return ""
     var info = payload.info
+    if (info.folders) return "Choose how folders are handled"
     return "\"" + Model.basename(String(info.dest || "")) + "\" already exists in this folder."
   }
 
@@ -4598,6 +4621,7 @@ Item {
       return
     }
     conflictShownMs = Date.now()
+    conflictAll = false
     showDialog("conflict", "File exists", "", { jobId: jobId, info: info })
   }
 

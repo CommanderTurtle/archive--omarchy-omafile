@@ -730,8 +730,15 @@ def open_parent(path_bytes):
     return fd
 
 
-def resolve_conflict(req_id, cancel_event, source_str, dest_str, dest_bytes, conflict_mode, job_state):
-    if job_state.get("applyAll"):
+def resolve_conflict(req_id, cancel_event, source_str, dest_str, dest_bytes, conflict_mode, job_state, directory=False, folders=False):
+    if not folders and conflict_mode == "ask" and job_state.get("hasFolders") and "mergeDirs" not in job_state:
+        choice = resolve_conflict(req_id, cancel_event, source_str, dest_str, dest_bytes, conflict_mode, job_state, folders=True)
+        if choice not in ("overwrite", "merge"):
+            return "cancel"
+        job_state["mergeDirs"] = choice == "merge"
+    if not folders and directory and job_state.get("mergeDirs"):
+        return "merge"
+    if not folders and job_state.get("applyAll"):
         return job_state["applyAll"]
     if conflict_mode != "ask":
         return conflict_mode
@@ -749,7 +756,7 @@ def resolve_conflict(req_id, cancel_event, source_str, dest_str, dest_bytes, con
         seq = CONFLICT_SEQ[0]
         PENDING_CONFLICTS[req_id] = {"event": ev, "action": None, "applyAll": False, "seq": seq}
     emit({"id": req_id, "t": "conflict", "source": source_str, "dest": dest_str,
-          "destKind": dkind, "destSize": dsize, "destMtime": dmtime, "seq": seq})
+          "destKind": dkind, "destSize": dsize, "destMtime": dmtime, "seq": seq, "folders": folders})
     while True:
         if cancel_event.is_set():
             with CONFLICT_LOCK:
@@ -760,7 +767,7 @@ def resolve_conflict(req_id, cancel_event, source_str, dest_str, dest_bytes, con
     with CONFLICT_LOCK:
         info = PENDING_CONFLICTS.pop(req_id, None)
     action = info["action"] if info else "cancel"
-    if info and info.get("applyAll") and action in ("overwrite", "skip", "rename"):
+    if not folders and info and info.get("applyAll") and action in ("overwrite", "skip", "rename"):
         job_state["applyAll"] = action
     return action
 
@@ -768,7 +775,7 @@ def op_resolve(req):
     req_id = req["id"]
     action = req.get("action")
     apply_all = bool(req.get("applyAll", False))
-    if action not in ("overwrite", "skip", "rename", "cancel"):
+    if action not in ("overwrite", "skip", "rename", "cancel", "merge"):
         action = "cancel"
     with CONFLICT_LOCK:
         info = PENDING_CONFLICTS.get(req_id)
@@ -797,9 +804,10 @@ def op_copy_move(req, cancel_event, is_move):
 
     total_bytes = 0
     total_files = 0
+    has_folders = False
 
     def prescan(p):
-        nonlocal total_bytes, total_files
+        nonlocal total_bytes, total_files, has_folders
         try:
             lst = os.lstat(p)
         except OSError:
@@ -808,6 +816,7 @@ def op_copy_move(req, cancel_event, is_move):
         if stat.S_ISLNK(lst.st_mode):
             return
         if stat.S_ISDIR(lst.st_mode):
+            has_folders = True
             try:
                 with os.scandir(p) as it:
                     for e in it:
@@ -832,7 +841,7 @@ def op_copy_move(req, cancel_event, is_move):
     files_done = [0]
     start_time = time.monotonic()
     last_progress = [0.0]
-    job_state = {}
+    job_state = {"hasFolders": has_folders}
 
     def emit_progress(current_str, force=False):
         now = time.monotonic()
@@ -863,10 +872,13 @@ def op_copy_move(req, cancel_event, is_move):
         existing = lstat_at(dst_fd, dst_name)
         if existing is None:
             return dst_name, False, False
+        both_dirs = stat.S_ISDIR(existing.st_mode) and stat.S_ISDIR(src_lst.st_mode)
         if (existing.st_dev, existing.st_ino) == (src_lst.st_dev, src_lst.st_ino):
             action = same_action
         else:
-            action = resolve_conflict(req_id, cancel_event, to_str(src_path), to_str(dst_path), dst_path, conflict_mode, job_state)
+            action = resolve_conflict(req_id, cancel_event, to_str(src_path), to_str(dst_path), dst_path, conflict_mode, job_state, both_dirs)
+        if action == "merge" and both_dirs:
+            return dst_name, False, True
         if action == "cancel":
             raise Cancelled()
         if action == "skip":
@@ -875,8 +887,7 @@ def op_copy_move(req, cancel_event, is_move):
         if action == "rename":
             return unique_name_at(dst_fd, dst_name), False, False
         if action == "overwrite":
-            both_dirs = stat.S_ISDIR(existing.st_mode) and stat.S_ISDIR(src_lst.st_mode)
-            if merge_dirs and both_dirs:
+            if job_state.get("mergeDirs", merge_dirs) and both_dirs:
                 return dst_name, False, True
             if not stat.S_ISDIR(existing.st_mode) and not stat.S_ISDIR(src_lst.st_mode):
                 return dst_name, True, False
@@ -890,7 +901,7 @@ def op_copy_move(req, cancel_event, is_move):
             if lstat_at(dst_fd, candidate) is None:
                 return candidate
 
-    def copy_at(src_fd, src_name, dst_fd, dst_name, src_path, dst_path, same_action="rename"):
+    def copy_at(src_fd, src_name, dst_fd, dst_name, src_path, dst_path, same_action="rename", moving=False):
         nonlocal copied
         if cancel_event.is_set():
             raise Cancelled()
@@ -947,9 +958,15 @@ def op_copy_move(req, cancel_event, is_move):
                 for name in names:
                     if cancel_event.is_set():
                         raise Cancelled()
-                    copy_at(child_src, name, child_dst, name,
+                    (move_at if moving else copy_at)(child_src, name, child_dst, name,
                             os.path.join(src_path, name), os.path.join(os.path.dirname(dst_path), target, name))
                 copy_meta_fd(child_dst, lst)
+                if moving:
+                    try:
+                        os.rmdir(src_name, dir_fd=src_fd)
+                    except OSError as e:
+                        if e.errno != errno.ENOTEMPTY:
+                            fail(src_path, e)
             finally:
                 os.close(child_src)
                 os.close(child_dst)
@@ -1016,8 +1033,11 @@ def op_copy_move(req, cancel_event, is_move):
         except OSError as e:
             fail(src_path, e)
             return
-        target, replace, _ = place_target(lst, dst_fd, dst_name, src_path, dst_path, "skip", False)
+        target, replace, merged = place_target(lst, dst_fd, dst_name, src_path, dst_path, "skip", False)
         if target is None:
+            return
+        if merged:
+            copy_at(src_fd, src_name, dst_fd, target, src_path, dst_path, "skip", moving=True)
             return
         emit_progress(to_str(src_path))
         try:

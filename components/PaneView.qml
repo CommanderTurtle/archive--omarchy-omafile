@@ -104,6 +104,7 @@ Item {
   }
 
   function pressItem(index, mouse) {
+    if (index < 0 || index >= pane.rows.length) return false
     var extend = (mouse.modifiers & Qt.ShiftModifier) !== 0
     var toggle = (mouse.modifiers & Qt.ControlModifier) !== 0
     if (!extend && !toggle && pane.selection[pane.rows[index][0]]) {
@@ -205,7 +206,7 @@ Item {
     var next = rows
     var keys = new Array(next.length)
     var raws = new Array(next.length)
-    var at = ({})
+    var at = Object.create(null)
     for (var i = 0; i < next.length; i++) {
       keys[i] = rowKey(next[i])
       raws[i] = JSON.stringify(next[i])

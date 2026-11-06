@@ -282,13 +282,13 @@ Item {
     }
     flushProgress(id)
     if (type === "error") {
-      if (handlers.onError) handlers.onError(msg)
-      releasePending(id)
+      try { if (handlers.onError) handlers.onError(msg) }
+      finally { releasePending(id) }
       return
     }
     if (type === "done") {
-      if (handlers.onDone) handlers.onDone(msg)
-      if (!handlers.keepAlive) releasePending(id)
+      try { if (handlers.onDone) handlers.onDone(msg) }
+      finally { if (!handlers.keepAlive) releasePending(id) }
       return
     }
     if (handlers.onData) handlers.onData(msg)
@@ -1326,6 +1326,14 @@ Item {
     return true
   }
 
+  property Component delayTimer: Component { Timer { repeat: false } }
+
+  function after(ms, fn) {
+    var t = delayTimer.createObject(root, { interval: ms })
+    t.triggered.connect(function () { t.destroy(); fn() })
+    t.start()
+  }
+
   function launchWhenReachable(path, launch, onFail) {
     // A network folder can be slow to answer; a terminal spawned before the
     // path is reachable fails silently, so wait until it stats.
@@ -1335,7 +1343,7 @@ Item {
       statPaths([path], function (items) {
         var item = items && items[0]
         if (item && !item.error) { launch(); return }
-        if (Date.now() < deadline) Qt.timeout(500, probe)
+        if (Date.now() < deadline) after(500, probe)
         else if (onFail) onFail("This network folder did not become reachable in time")
       })
     }
@@ -1347,7 +1355,7 @@ Item {
     var remote = isGvfsPath(path)
     function launch() {
       if (configured) Quickshell.execDetached(["sh", "-c", "cd \"$1\" && " + configured, "omafile", path])
-      else if (remote) Quickshell.execDetached(["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--", "sh", "-c", "cd '" + path + "' && exec ${SHELL:-bash}"])
+      else if (remote) Quickshell.execDetached(["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--", "sh", "-c", "cd \"$1\" && exec \"${SHELL:-bash}\"", "omafile", path])
       else Quickshell.execDetached(["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--dir=" + path])
     }
     launchWhenReachable(path, launch, onFail)
@@ -1357,7 +1365,7 @@ Item {
     var agent = agentCommand || "claude"
     var remote = isGvfsPath(path)
     function launch() {
-      if (remote) Quickshell.execDetached(["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--", "sh", "-c", "cd '" + path + "' && exec bash -c '" + agent + "; exec bash'"])
+      if (remote) Quickshell.execDetached(["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--", "sh", "-c", "cd \"$1\" && exec bash -c \"$2\"", "omafile", path, agent + "; exec bash"])
       else Quickshell.execDetached(["setsid", "uwsm-app", "--", "xdg-terminal-exec", "--dir=" + path, "bash", "-c", agent + "; exec bash"])
     }
     launchWhenReachable(path, launch, onFail)

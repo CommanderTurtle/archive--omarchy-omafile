@@ -222,6 +222,7 @@ Item {
   property var closedTabs: []
 
   function closeTab(side, index) {
+    if (index < 0 || index >= tabsFor(side).length) return
     storeCurrentTab(side)
     var list = tabsFor(side).slice()
     if (list.length <= 1) {
@@ -4365,6 +4366,7 @@ Item {
                 }
                 Text {
                   text: "(do for all)"
+                  textFormat: Text.PlainText
                   color: Color.popups.text
                   font.family: Style.font.family
                   font.pixelSize: Style.font.caption

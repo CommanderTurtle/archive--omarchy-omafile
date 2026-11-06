@@ -637,6 +637,19 @@ def link_trusted(lst, dir_fd, mounts):
     return True
 
 
+def trusted_link_target(dir_fd, name, mounts, message, shown):
+    fd = os.open(name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
+    try:
+        lst = os.fstat(fd)
+        if not stat.S_ISLNK(lst.st_mode):
+            return None
+        if not link_trusted(lst, dir_fd, mounts):
+            raise OSError(errno.ELOOP, message, to_str(shown))
+        return os.readlink(b"", dir_fd=fd)
+    finally:
+        os.close(fd)
+
+
 def open_dir_safely(path_bytes, create=False):
     if not path_bytes.startswith(b"/"):
         raise OSError(errno.EINVAL, "path must be absolute", to_str(path_bytes))
@@ -666,17 +679,15 @@ def open_dir_safely(path_bytes, create=False):
             except OSError as e:
                 if e.errno not in (errno.ELOOP, errno.ENOTDIR):
                     raise
-                lst = os.lstat(comp, dir_fd=fd)
-                if not stat.S_ISLNK(lst.st_mode):
-                    raise
                 if mounts is None:
                     mounts = mount_entries()
-                if not link_trusted(lst, fd, mounts):
-                    raise OSError(errno.ELOOP, "a folder in this path is a link Omafile will not follow here", to_str(path_bytes))
+                target = trusted_link_target(fd, comp, mounts,
+                                             "a folder in this path is a link Omafile will not follow here", path_bytes)
+                if target is None:
+                    raise
                 hops += 1
                 if hops > MAX_LINK_HOPS:
                     raise OSError(errno.ELOOP, "too many links", to_str(path_bytes))
-                target = os.readlink(comp, dir_fd=fd)
                 if target.startswith(b"/"):
                     os.close(fd)
                     fd = os.open(b"/", PATH_OPEN_FLAGS)
@@ -688,6 +699,10 @@ def open_dir_safely(path_bytes, create=False):
     except BaseException:
         os.close(fd)
         raise
+
+
+def inside_or_same(path, folder):
+    return path == folder or path.startswith(folder.rstrip(b"/") + b"/")
 
 
 def valid_leaf(name):
@@ -857,17 +872,17 @@ def op_copy_move(req, cancel_event, is_move):
 
     top = {"armed": False, "name": None, "merged": False}
 
-    def place_target(src_lst, dst_fd, dst_name, src_path, dst_path, same_action, merge_dirs):
+    def place_target(src_lst, src_fd, dst_fd, dst_name, src_path, dst_path, same_action, merge_dirs):
         nonlocal skipped
         armed = top["armed"]
         top["armed"] = False
-        result = place_target_inner(src_lst, dst_fd, dst_name, src_path, dst_path, same_action, merge_dirs)
+        result = place_target_inner(src_lst, src_fd, dst_fd, dst_name, src_path, dst_path, same_action, merge_dirs)
         if armed:
             top["name"] = result[0]
             top["merged"] = result[2]
         return result
 
-    def place_target_inner(src_lst, dst_fd, dst_name, src_path, dst_path, same_action, merge_dirs):
+    def place_target_inner(src_lst, src_fd, dst_fd, dst_name, src_path, dst_path, same_action, merge_dirs):
         nonlocal skipped
         existing = lstat_at(dst_fd, dst_name)
         if existing is None:
@@ -891,7 +906,13 @@ def op_copy_move(req, cancel_event, is_move):
                 return dst_name, False, True
             if not stat.S_ISDIR(existing.st_mode) and not stat.S_ISDIR(src_lst.st_mode):
                 return dst_name, True, False
-            remove_at(dst_fd, dst_name, existing)
+            try:
+                if stat.S_ISDIR(existing.st_mode) and inside_or_same(real_dir(src_fd), os.path.join(real_dir(dst_fd), dst_name)):
+                    raise OSError(errno.EINVAL, "the folder being replaced holds this item")
+                remove_at(dst_fd, dst_name, existing)
+            except OSError as e:
+                fail(src_path, e)
+                return None, False, False
             return dst_name, False, False
         raise Cancelled()
 
@@ -910,7 +931,7 @@ def op_copy_move(req, cancel_event, is_move):
         except OSError as e:
             fail(src_path, e)
             return
-        target, replace, _ = place_target(lst, dst_fd, dst_name, src_path, dst_path, same_action, True)
+        target, replace, _ = place_target(lst, src_fd, dst_fd, dst_name, src_path, dst_path, same_action, True)
         if target is None:
             return
         src_str = to_str(src_path)
@@ -1033,7 +1054,7 @@ def op_copy_move(req, cancel_event, is_move):
         except OSError as e:
             fail(src_path, e)
             return
-        target, replace, merged = place_target(lst, dst_fd, dst_name, src_path, dst_path, "skip", False)
+        target, replace, merged = place_target(lst, src_fd, dst_fd, dst_name, src_path, dst_path, "skip", False)
         if target is None:
             return
         if merged:
@@ -1090,7 +1111,11 @@ def op_copy_move(req, cancel_event, is_move):
             top["name"] = None
             top["merged"] = False
             try:
-                if is_move:
+                src_lst = lstat_at(parent_fd, name)
+                if (src_lst is not None and stat.S_ISDIR(src_lst.st_mode)
+                        and inside_or_same(real_dir(dest_fd), os.path.join(real_dir(parent_fd), name))):
+                    fail(src_bytes, OSError(errno.EINVAL, "a folder cannot go inside itself"))
+                elif is_move:
                     move_at(parent_fd, name, dest_fd, name, src_bytes, dst_bytes)
                 else:
                     copy_at(parent_fd, name, dest_fd, name, src_bytes, dst_bytes)

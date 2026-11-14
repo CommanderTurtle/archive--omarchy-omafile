@@ -361,6 +361,19 @@ function expandTilde(path, homePath) {
   return p;
 }
 
+// Turn a typed path into an absolute one: absolute stays as it is, `~`
+// expands, and anything else is taken relative to the folder given, so a
+// relative path is accepted but always resolved before it is used.
+function resolveTargetPath(path, folder, homePath) {
+  var raw = String(path || '').trim();
+  if (raw === '') return '';
+  var expanded = expandTilde(raw, homePath);
+  if (expanded.charAt(0) === '/') return normalizePath(expanded);
+  var base = String(folder || '');
+  if (base === '') return '';
+  return normalizePath(joinPath(base, expanded));
+}
+
 function collapseTilde(path, homePath) {
   var p = String(path || '');
   var home = String(homePath || '');

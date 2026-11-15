@@ -425,6 +425,7 @@ class PrivilegedOwnershipTests(HelperTestCase):
         self.assertEqual(done["t"], "done")
         self.assertEqual(done["changed"], 2, "the tool reports how many paths changed")
         self.assertEqual(self.argv(), [self.path("fake-pkexec"), "-h", "-c",
+                                       "--from=%d:%d" % (os.geteuid(), os.getegid()),
                                        "%d:%d" % (uid, gid), "--", target])
 
     def test_privileged_chown_of_a_group_alone_names_only_the_group(self):
@@ -434,7 +435,8 @@ class PrivilegedOwnershipTests(HelperTestCase):
         msgs = self.helper.call({"id": self.next_id(), "op": "chown", "path": target,
                                  "group": str(gid), "privileged": True, "recursive": True})
         self.assertEqual(self.terminal(msgs)["t"], "done")
-        self.assertEqual(self.argv(), [self.path("fake-pkexec"), "-h", "-c", "-R",
+        self.assertEqual(self.argv(), [self.path("fake-pkexec"), "-h", "-c",
+                                       "--from=%d:%d" % (os.geteuid(), os.getegid()), "-R",
                                        ":%d" % gid, "--", target])
 
     def test_a_cancelled_authentication_is_reported_as_such(self):
@@ -462,6 +464,45 @@ class PrivilegedOwnershipTests(HelperTestCase):
                                  "owner": "no-such-user-here", "privileged": True})
         self.assertEqual(self.terminal(msgs)["code"], "EINVAL")
         self.assertFalse(os.path.exists(self.log), "pkexec was never asked")
+
+    def test_the_privileged_route_asks_only_for_the_item_that_was_checked(self):
+        target = self.file("mine.txt")
+        self.fake()
+        msgs = self.helper.call({"id": self.next_id(), "op": "chown", "path": target,
+                                 "owner": str(os.geteuid()), "privileged": True})
+        self.assertEqual(self.terminal(msgs)["t"], "done")
+        self.assertIn("--from=%d:%d" % (os.geteuid(), os.getegid()), self.argv(),
+                      "the current owner comes from the folder handle")
+
+    def test_a_missing_path_still_reports_enoent(self):
+        msgs = self.helper.call({"id": self.next_id(), "op": "chown", "path": self.path("gone.txt"),
+                                 "owner": str(os.geteuid())})
+        self.assertEqual(self.terminal(msgs)["code"], "ENOENT")
+
+    def test_a_missing_path_reports_enoent_on_the_privileged_route_too(self):
+        self.fake()
+        msgs = self.helper.call({"id": self.next_id(), "op": "chown", "path": self.path("gone.txt"),
+                                 "owner": str(os.geteuid()), "privileged": True})
+        self.assertEqual(self.terminal(msgs)["code"], "ENOENT")
+        self.assertFalse(os.path.exists(self.log), "pkexec was never asked")
+
+    def test_the_privileged_route_refuses_a_folder_others_can_write(self):
+        target = self.file("mine.txt")
+        self.fake()
+        os.chmod(self.root, 0o777)
+        msgs = self.helper.call({"id": self.next_id(), "op": "chown", "path": target,
+                                 "owner": str(os.geteuid()), "privileged": True})
+        err = self.terminal(msgs)
+        self.assertEqual(err["code"], "EPERM")
+        self.assertFalse(os.path.exists(self.log), "pkexec was never asked")
+
+    def test_a_sticky_shared_folder_may_be_used(self):
+        target = self.file("mine.txt")
+        self.fake()
+        os.chmod(self.root, 0o1777)
+        msgs = self.helper.call({"id": self.next_id(), "op": "chown", "path": target,
+                                 "owner": str(os.geteuid()), "privileged": True})
+        self.assertEqual(self.terminal(msgs)["t"], "done")
 
     def test_identity_lists_every_account_and_group(self):
         msgs = self.helper.call({"id": self.next_id(), "op": "identity"})

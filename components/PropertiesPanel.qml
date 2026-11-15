@@ -30,6 +30,7 @@ Column {
   readonly property bool canChmod: info !== null && !info.error && !isLink && (isOwner || isRoot)
   readonly property bool canChown: isRoot && !isLink
   readonly property int originalBits: info ? (Number(info.mode) & 511) : 0
+  readonly property int specialBits: info ? ((Number(info.mode) >> 9) & 7) : 0
 
   property int editBits: 0
   property string editGroup: ""
@@ -548,6 +549,18 @@ Column {
       options: panel.groupMenuOpen ? panel.groupOptions() : []
       emptyLabel: "No other groups to list"
       onPicked: function (value) { panel.chooseGroup(value) }
+    }
+
+    Text {
+      objectName: "specialBitsNote"
+      width: parent.width
+      visible: panel.specialBits !== 0 && (panel.ownerDirty || panel.groupDirty)
+      textFormat: Text.PlainText
+      text: "Handing this item to another account or group clears its setuid and setgid bits."
+      color: Color.urgent
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
+      wrapMode: Text.WordWrap
     }
 
     Column {

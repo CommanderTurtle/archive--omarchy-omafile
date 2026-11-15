@@ -1887,6 +1887,54 @@ ShellRoot {
         browser.closeDialog()
       }
 
+      function test_9zc_foreignItemNamesWhoCanChange() {
+        waitRows()
+        mock.statItems = { "/tmp/alpha.yml": { kind: "f", size: 30, mtime: 300, atime: 300, ctime: 300,
+          mode: 33188, uid: 0, gid: 0, owner: "root", group: "root", mime: "text/yaml" } }
+        mock.identityInfo = { uid: 1000, user: "me", groups: ["me", "wheel"], root: false,
+          allUsers: ["daemon", "me", "root"], allGroups: ["me", "nogroup", "users", "wheel"] }
+        mock.calls = []
+        browser.propsIdentity = null
+        pane().setCursor(0, false, false)
+        browser.showProperties(pane().cursorEntry())
+        tryVerify(function () { return browser.propsInfo !== null && browser.propsIdentity !== null }, 3000)
+        wait(200)
+        mouseClick(findChild(browser, "securityTab"))
+        wait(200)
+        var boxes = []
+        function collect(item) {
+          if (item.objectName === "permBox") boxes.push(item)
+          for (var i = 0; i < item.children.length; i++) collect(item.children[i])
+        }
+        collect(findChild(browser, "dialogCard"))
+        compare(boxes[0].opacity, 0.5, "the bits stay greyed for an item that is not yours")
+        compare(findChild(browser, "ownerNote").visible, true,
+          "the card says outright who can still change it")
+        compare(findChild(browser, "ownerNote").text,
+          "Only root can hand an item to another account")
+        compare(findChild(browser, "groupNote").text, "Only the owner, root, can set a group")
+        compare(findChild(browser, "ownerChangeButton").enabled, true,
+          "the menu still offers the authenticated route")
+        browser.closeDialog()
+
+        mock.identityInfo = { uid: 0, user: "root", root: true, users: ["daemon", "me", "root"],
+          groups: ["me", "nogroup", "users", "wheel"], allUsers: ["daemon", "me", "root"],
+          allGroups: ["me", "nogroup", "users", "wheel"] }
+        browser.propsIdentity = null
+        pane().setCursor(0, false, false)
+        browser.showProperties(pane().cursorEntry())
+        tryVerify(function () { return browser.propsIdentity !== null && browser.propsIdentity.root === true }, 3000)
+        wait(200)
+        mouseClick(findChild(browser, "securityTab"))
+        wait(200)
+        boxes = []
+        collect(findChild(browser, "dialogCard"))
+        compare(boxes[0].opacity, 1, "root may set the bits")
+        verify(!findChild(browser, "ownerNote").visible, "root is told nothing about the owner")
+        verify(!findChild(browser, "groupNote").visible, "nor about the group")
+        browser.closeDialog()
+      }
+
       function test_9za_goneItemKeepsItsErrorMessageVisible() {
         waitRows()
         mock.statItems = { "/tmp/alpha.yml": { kind: "f", size: 30, mtime: 300, atime: 300, ctime: 300,

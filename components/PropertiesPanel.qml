@@ -508,6 +508,19 @@ Column {
       onPicked: function (value) { panel.chooseOwner(value) }
     }
 
+    Text {
+      objectName: "ownerNote"
+      textFormat: Text.PlainText
+      width: parent.width
+      visible: !panel.canChown
+      text: panel.isLink ? "Open the link target to hand it to another account"
+        : "Only root can hand an item to another account"
+      color: panel.dim
+      font.family: Style.font.family
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
+    }
+
     Row {
       width: parent.width
       spacing: Style.space(10)
@@ -555,6 +568,21 @@ Column {
       options: panel.groupMenuOpen ? panel.groupOptions() : []
       emptyLabel: "No other groups to list"
       onPicked: function (value) { panel.chooseGroup(value) }
+    }
+
+    Text {
+      objectName: "groupNote"
+      textFormat: Text.PlainText
+      width: parent.width
+      visible: !panel.canChmod
+      text: panel.isLink ? "Open the link target to change its group"
+        : (panel.info && panel.info.owner
+          ? "Only the owner, " + String(panel.info.owner) + ", can set a group"
+          : "Only the owner can set a group")
+      color: panel.dim
+      font.family: Style.font.family
+      font.pixelSize: Style.font.caption
+      wrapMode: Text.Wrap
     }
 
     Text {

@@ -44,7 +44,10 @@ Column {
   property bool groupMenuOpen: false
   property bool inheritOpen: false
   property bool confirmOpen: false
-  onEntryChanged: choosingOpener = false
+  onEntryChanged: {
+    choosingOpener = false
+    errorText = ""
+  }
 
   readonly property bool modeDirty: editBits !== originalBits
   readonly property bool groupDirty: info !== null && editGroup !== "" && editGroup !== String(info.group)
@@ -60,7 +63,6 @@ Column {
     editGroup = info ? String(info.group || "") : ""
     editOwner = info ? String(info.owner || "") : ""
     recursive = false
-    errorText = info && info.error ? errorText : ""
     ownerMenuOpen = false
     groupMenuOpen = false
     inheritOpen = false
@@ -75,6 +77,7 @@ Column {
 
   function toggleBit(row, col) {
     if (!canChmod || busy) return
+    errorText = ""
     editBits = editBits ^ bitFor(row, col)
   }
 
@@ -129,12 +132,14 @@ Column {
   readonly property bool groupNeedsAuth: groupDirty && !groupSettable(editGroup)
 
   function chooseOwner(name) {
+    errorText = ""
     ownerMenuOpen = false
     editOwner = name
     confirmOpen = ownerDirty || groupDirty
   }
 
   function chooseGroup(name) {
+    errorText = ""
     groupMenuOpen = false
     editGroup = name
     confirmOpen = ownerDirty || groupDirty
@@ -181,6 +186,7 @@ Column {
   function cancelConfirm() {
     confirmOpen = false
     resetEdits()
+    errorText = ""
   }
 
   function fail(m) {
@@ -763,6 +769,7 @@ Column {
     }
 
     Text {
+      objectName: "permissionsError"
       textFormat: Text.PlainText
       width: parent.width
       visible: panel.errorText !== ""
@@ -823,7 +830,10 @@ Column {
       Button {
         text: "Revert"
         bordered: true
-        onClicked: panel.resetEdits()
+        onClicked: {
+          panel.resetEdits()
+          panel.errorText = ""
+        }
       }
     }
   }

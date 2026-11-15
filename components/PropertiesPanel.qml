@@ -60,7 +60,7 @@ Column {
     editGroup = info ? String(info.group || "") : ""
     editOwner = info ? String(info.owner || "") : ""
     recursive = false
-    errorText = ""
+    errorText = info && info.error ? errorText : ""
     ownerMenuOpen = false
     groupMenuOpen = false
     inheritOpen = false
@@ -828,8 +828,38 @@ Column {
     }
   }
 
+  Column {
+    id: permissionsGoneSection
+    width: parent.width
+    visible: panel.tab === "security" && panel.info !== null && !!panel.info.error
+    spacing: Style.space(8)
+
+    Text {
+      objectName: "permissionsGoneNote"
+      textFormat: Text.PlainText
+      width: parent.width
+      text: "This item is no longer here."
+      color: panel.dim
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
+    }
+
+    Text {
+      objectName: "permissionsGoneError"
+      textFormat: Text.PlainText
+      width: parent.width
+      visible: panel.errorText !== ""
+      text: panel.errorText
+      color: Color.urgent
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
+      wrapMode: Text.Wrap
+    }
+  }
+
   Item {
     width: 1
-    height: Math.max(0, panel.tallest - (panel.tab === "general" ? generalSection.implicitHeight : permissionsSection.implicitHeight))
+    height: Math.max(0, panel.tallest - (panel.tab === "general" ? generalSection.implicitHeight
+      : Math.max(permissionsSection.implicitHeight, permissionsGoneSection.implicitHeight)))
   }
 }

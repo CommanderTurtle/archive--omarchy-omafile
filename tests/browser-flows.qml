@@ -1887,6 +1887,40 @@ ShellRoot {
         browser.closeDialog()
       }
 
+      function test_9za_goneItemKeepsItsErrorMessageVisible() {
+        waitRows()
+        mock.statItems = { "/tmp/alpha.yml": { kind: "f", size: 30, mtime: 300, atime: 300, ctime: 300,
+          mode: 33188, uid: 1000, gid: 1000, owner: "me", group: "me", mime: "text/plain" } }
+        mock.identityInfo = { uid: 1000, user: "me", groups: ["me", "wheel"], root: false,
+          allUsers: ["daemon", "me", "root"], allGroups: ["me", "nogroup", "users", "wheel"] }
+        mock.ownerResult = ({})
+        mock.calls = []
+        browser.propsIdentity = null
+        pane().setCursor(0, false, false)
+        browser.showProperties(pane().cursorEntry())
+        tryVerify(function () { return browser.propsInfo !== null && browser.propsIdentity !== null }, 3000)
+        wait(200)
+        mouseClick(findChild(browser, "securityTab"))
+        wait(200)
+        mouseClick(findChild(browser, "ownerChangeButton"))
+        wait(300)
+        tryVerify(function () { return findChild(browser, "ownerChoices").visible }, 3000)
+        mouseClick(findChild(browser, "choice-daemon"))
+        wait(300)
+        tryVerify(function () { return findChild(browser, "confirmQuestion").visible }, 3000)
+        mock.ownerResult = { code: "ENOENT", message: "No such file or directory" }
+        mock.statItems = { "/tmp/alpha.yml": { error: "ENOENT" } }
+        mouseClick(findChild(browser, "confirmYes"))
+        wait(400)
+        tryVerify(function () { return findChild(browser, "permissionsGoneNote").visible }, 3000,
+          "the Security tab says plainly that the item is no longer there")
+        compare(findChild(browser, "permissionsGoneError").text, "No such file or directory",
+          "the reason stays on screen instead of blanking the tab")
+        mock.ownerResult = ({})
+        mock.statItems = {}
+        browser.closeDialog()
+      }
+
       function test_8b_pickSaveNamesStayInTheFolder() {
         mock.calls = []
         browser.pickerRequest = { mode: "save", result: "/run/u.json", currentFolder: "/tmp", currentName: "x.txt" }
